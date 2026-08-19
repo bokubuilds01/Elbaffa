@@ -12,6 +12,7 @@ out-tsc/
 .env
 .env.*
 !.env.example
+!.env.local
 
 # IDE
 /.idea/
