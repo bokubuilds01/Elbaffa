@@ -5,7 +5,9 @@
  * El BAFFA sales and inventory API
  * OpenAPI spec version: 0.1.0
  */
+import type { Order } from './order';
 
-export interface HealthStatus {
-  status: string;
-}
+export type Invoice = Order & {
+  invoiceNumber: string;
+  employee: string;
+};

@@ -5,7 +5,6 @@
  * El BAFFA sales and inventory API
  * OpenAPI spec version: 0.1.0
  */
+import type { ProductInput } from './productInput';
 
-export interface HealthStatus {
-  status: string;
-}
+export type ProductUpdate = ProductInput;
