@@ -415,6 +415,8 @@ function DashboardPage() {
   const [, setLocation] = useLocation();
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
+  const [confirmRoom, setConfirmRoom] = useState<Room | null>(null);
+  const [opening, setOpening] = useState(false);
   const { profile, isAdmin } = useAuth();
 
   const load = useCallback(async () => {
@@ -432,12 +434,19 @@ function DashboardPage() {
   const openCount = rooms.filter((r) => r.status === 'open').length;
 
   const openRoom = async (room: Room) => {
+    setConfirmRoom(room);
+  };
+
+  const confirmOpen = async () => {
+    if (!confirmRoom) return;
+    setOpening(true);
     try {
-      const order = await apiOpenRoomOrder(room.id);
-      setLocation(`/rooms/${room.id}`);
+      await apiOpenRoomOrder(confirmRoom.id);
+      setLocation(`/rooms/${confirmRoom.id}`);
     } catch (err) {
       console.error('Failed to open room:', err);
     }
+    setOpening(false);
   };
 
   return (
@@ -504,6 +513,26 @@ function DashboardPage() {
           </div>
         )}
       </section>
+      {confirmRoom && (
+        <Modal title={confirmRoom.status === 'open' ? `فتح طلب ${confirmRoom.name}` : `فتح طلب ${confirmRoom.name}`} onClose={() => setConfirmRoom(null)}>
+          <div className="text-center">
+            <p className="text-sm text-muted-foreground mb-6">
+              {confirmRoom.status === 'open'
+                ? `الغرفة بها طلب مفتوح بإجمالي ${money.format(confirmRoom.total)}. هل تريد متابعة الطلب؟`
+                : `هل تريد فتح طلب جديد في ${confirmRoom.name}؟`
+              }
+            </p>
+            <div className="flex gap-3 justify-center">
+              <Button variant="soft" onClick={() => setConfirmRoom(null)} disabled={opening}>
+                العودة
+              </Button>
+              <Button onClick={confirmOpen} disabled={opening}>
+                {opening ? 'جارِ الفتح...' : confirmRoom.status === 'open' ? 'متابعة الطلب' : 'فتح الطلب'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }
@@ -596,12 +625,27 @@ function RoomPage() {
 
   const addProduct = async (product: Product) => {
     if (!order) return;
+    const existingItem = order.items.find((i) => i.productId === product.id);
+    let newItems: OrderItem[];
+    if (existingItem) {
+      newItems = order.items.map((i) =>
+        i.id === existingItem.id
+          ? { ...i, quantity: i.quantity + 1, total: (i.quantity + 1) * i.unitPrice }
+          : i,
+      );
+    } else {
+      newItems = [...order.items, { id: Date.now(), productId: product.id, name: product.name, quantity: 1, unitPrice: product.sellingPrice, total: product.sellingPrice }];
+    }
+    const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
+    setOrder({ ...order, items: newItems, total: newTotal });
+    setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
     try {
       const updated = await apiAddOrderItem(order.id, product.id, 1);
       setOrder(updated);
       setRoom((prev) => prev ? { ...prev, total: updated.total } : prev);
     } catch (err) {
       console.error('Failed to add product:', err);
+      loadOrder();
     }
   };
 
@@ -610,6 +654,21 @@ function RoomPage() {
     const item = order.items.find((i) => i.id === itemId);
     if (!item) return;
     const newQty = item.quantity + delta;
+
+    if (newQty < 1) {
+      const newItems = order.items.filter((i) => i.id !== itemId);
+      const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
+      setOrder({ ...order, items: newItems, total: newTotal });
+      setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
+    } else {
+      const newItems = order.items.map((i) =>
+        i.id === itemId ? { ...i, quantity: newQty, total: newQty * i.unitPrice } : i,
+      );
+      const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
+      setOrder({ ...order, items: newItems, total: newTotal });
+      setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
+    }
+
     try {
       if (newQty < 1) {
         const updated = await apiRemoveOrderItem(order.id, itemId);
@@ -620,16 +679,22 @@ function RoomPage() {
       }
     } catch (err) {
       console.error('Failed to update item:', err);
+      loadOrder();
     }
   };
 
   const removeItem = async (itemId: number) => {
     if (!order) return;
+    const newItems = order.items.filter((i) => i.id !== itemId);
+    const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
+    setOrder({ ...order, items: newItems, total: newTotal });
+    setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
     try {
       const updated = await apiRemoveOrderItem(order.id, itemId);
       setOrder(updated);
     } catch (err) {
       console.error('Failed to remove item:', err);
+      loadOrder();
     }
   };
 

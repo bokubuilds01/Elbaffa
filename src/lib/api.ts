@@ -98,72 +98,68 @@ export interface UserProfile {
 }
 
 // ============================================================
-// API Helpers
+// Helpers
 // ============================================================
 
 const num = (v: string | number | null | undefined) => Number(v ?? 0);
 
-function buildOrderPayload(
-  order: any,
-  roomName: string,
-  items: any[]
-): Order {
+function buildOrderItems(rawItems: any[]): OrderItem[] {
+  return rawItems.map((item: any) => ({
+    id: item.id,
+    productId: item.product_id,
+    name: item.products?.name ?? item.name ?? '',
+    quantity: item.quantity,
+    unitPrice: num(item.unit_price),
+    total: item.quantity * num(item.unit_price),
+  }));
+}
+
+async function readOrder(orderId: number): Promise<Order | null> {
+  const { data: order, error: orderErr } = await supabase
+    .from('orders')
+    .select('*, rooms!orders_room_id_fkey(name), order_items(*, products(name))')
+    .eq('id', orderId)
+    .single();
+  if (orderErr || !order) return null;
+
+  const items = buildOrderItems(order.order_items ?? []);
+
   return {
     id: order.id,
     roomId: order.room_id,
-    roomName,
+    roomName: order.rooms?.name ?? `غرفة ${order.room_id}`,
     status: order.status,
     total: num(order.total),
-    items: items.map((item: any) => ({
-      id: item.id,
-      productId: item.product_id,
-      name: item.products?.name ?? item.name ?? '',
-      quantity: item.quantity,
-      unitPrice: num(item.unit_price),
-      total: item.quantity * num(item.unit_price),
-    })),
+    items,
     createdAt: order.created_at,
     closedAt: order.closed_at ?? null,
   };
 }
 
-async function readOrder(orderId: number): Promise<Order | null> {
-  const { data: order } = await supabase
-    .from('orders')
-    .select('*')
-    .eq('id', orderId)
-    .single();
-  if (!order) return null;
-
-  const { data: room } = await supabase
-    .from('rooms')
-    .select('name')
-    .eq('id', order.room_id)
-    .single();
-
+async function recalcOrderTotal(orderId: number): Promise<number> {
   const { data: items } = await supabase
     .from('order_items')
-    .select('*, products(name)')
-    .eq('order_id', orderId)
-    .order('id');
-
-  return buildOrderPayload(order, room?.name ?? `غرفة ${order.room_id}`, items ?? []);
+    .select('quantity, unit_price')
+    .eq('order_id', orderId);
+  const total = items?.reduce((sum, item) => sum + item.quantity * num(item.unit_price), 0) ?? 0;
+  await supabase.from('orders').update({ total: String(total) }).eq('id', orderId);
+  return total;
 }
 
 // ============================================================
 // Rooms
 // ============================================================
 export async function listRooms(): Promise<Room[]> {
-  const { data: rooms } = await supabase.from('rooms').select('*').order('id');
-  if (!rooms) return [];
+  const [roomsRes, ordersRes] = await Promise.all([
+    supabase.from('rooms').select('*').order('id'),
+    supabase.from('orders').select('id, room_id, total').eq('status', 'open'),
+  ]);
 
-  const { data: openOrders } = await supabase
-    .from('orders')
-    .select('id, room_id, total')
-    .eq('status', 'open');
+  const rooms = roomsRes.data ?? [];
+  const openOrders = ordersRes.data ?? [];
 
   return rooms.map((room) => {
-    const order = openOrders?.find((o) => o.room_id === room.id);
+    const order = openOrders.find((o) => o.room_id === room.id);
     return {
       id: room.id,
       name: room.name,
@@ -180,7 +176,7 @@ export async function listRooms(): Promise<Room[]> {
 export async function openRoomOrder(roomId: number): Promise<Order> {
   const { data: existing } = await supabase
     .from('orders')
-    .select('*')
+    .select('id')
     .eq('room_id', roomId)
     .eq('status', 'open')
     .limit(1)
@@ -205,14 +201,14 @@ export async function getOrder(orderId: number): Promise<Order | null> {
 export async function addOrderItem(orderId: number, productId: number, quantity: number = 1): Promise<Order> {
   const { data: product } = await supabase
     .from('products')
-    .select('*')
+    .select('id, name, selling_price')
     .eq('id', productId)
     .single();
   if (!product) throw new Error('المنتج غير موجود');
 
   const { data: existing } = await supabase
     .from('order_items')
-    .select('*')
+    .select('id, quantity')
     .eq('order_id', orderId)
     .eq('product_id', productId)
     .maybeSingle();
@@ -228,77 +224,61 @@ export async function addOrderItem(orderId: number, productId: number, quantity:
       .insert({ order_id: orderId, product_id: productId, quantity, unit_price: product.selling_price });
   }
 
-  const { data: items } = await supabase.from('order_items').select('*').eq('order_id', orderId);
-  const total = items?.reduce((sum, item) => sum + item.quantity * num(item.unit_price), 0) ?? 0;
-  await supabase.from('orders').update({ total: total.toFixed(2) }).eq('id', orderId);
-
+  await recalcOrderTotal(orderId);
   return (await readOrder(orderId))!;
 }
 
 export async function updateOrderItem(orderId: number, itemId: number, quantity: number): Promise<Order> {
-  await supabase
-    .from('order_items')
-    .update({ quantity })
-    .eq('id', itemId)
-    .eq('order_id', orderId);
+  if (quantity < 1) {
+    await supabase.from('order_items').delete().eq('id', itemId).eq('order_id', orderId);
+  } else {
+    await supabase.from('order_items').update({ quantity }).eq('id', itemId).eq('order_id', orderId);
+  }
 
-  const { data: items } = await supabase.from('order_items').select('*').eq('order_id', orderId);
-  const total = items?.reduce((sum, item) => sum + item.quantity * num(item.unit_price), 0) ?? 0;
-  await supabase.from('orders').update({ total: total.toFixed(2) }).eq('id', orderId);
-
+  await recalcOrderTotal(orderId);
   return (await readOrder(orderId))!;
 }
 
 export async function removeOrderItem(orderId: number, itemId: number): Promise<Order> {
-  await supabase
-    .from('order_items')
-    .delete()
-    .eq('id', itemId)
-    .eq('order_id', orderId);
-
-  const { data: items } = await supabase.from('order_items').select('*').eq('order_id', orderId);
-  const total = items?.reduce((sum, item) => sum + item.quantity * num(item.unit_price), 0) ?? 0;
-  await supabase.from('orders').update({ total: total.toFixed(2) }).eq('id', orderId);
-
+  await supabase.from('order_items').delete().eq('id', itemId).eq('order_id', orderId);
+  await recalcOrderTotal(orderId);
   return (await readOrder(orderId))!;
 }
 
 export async function closeOrder(orderId: number): Promise<Invoice> {
   const { data: order } = await supabase
     .from('orders')
-    .select('*')
+    .select('*, order_items(*, products(name, stock))')
     .eq('id', orderId)
     .single();
   if (!order || order.status !== 'open') throw new Error('الطلب مغلق بالفعل');
 
-  const { data: items } = await supabase
-    .from('order_items')
-    .select('*')
-    .eq('order_id', orderId);
+  const items = order.order_items ?? [];
 
-  // Transaction: deduct stock + create sale
-  for (const item of items ?? []) {
-    const { data: product } = await supabase
-      .from('products')
-      .select('*')
-      .eq('id', item.product_id)
-      .single();
-    if (!product || product.stock < item.quantity) {
-      throw new Error('الكمية المطلوبة أكبر من المخزون المتاح');
+  for (const item of items) {
+    const stock = item.products?.stock ?? 0;
+    if (stock < item.quantity) {
+      throw new Error(`${item.products?.name}: الكمية المطلوبة (${item.quantity}) أكبر من المخزون (${stock})`);
     }
-    await supabase
-      .from('products')
-      .update({ stock: product.stock - item.quantity })
-      .eq('id', item.product_id);
-    await supabase
-      .from('inventory_transactions')
-      .insert({ product_id: item.product_id, quantity: -item.quantity, type: 'sale', reference_id: orderId });
   }
 
-  await supabase
-    .from('orders')
-    .update({ status: 'closed', closed_at: new Date().toISOString() })
-    .eq('id', orderId);
+  await Promise.all([
+    ...items.map((item: any) =>
+      Promise.all([
+        supabase
+          .from('products')
+          .update({ stock: item.products.stock - item.quantity })
+          .eq('id', item.product_id),
+        supabase
+          .from('inventory_transactions')
+          .insert({ product_id: item.product_id, quantity: -item.quantity, type: 'sale', reference_id: orderId }),
+      ])
+    ),
+    supabase
+      .from('orders')
+      .update({ status: 'closed', closed_at: new Date().toISOString() })
+      .eq('id', orderId),
+  ]);
 
   const { data: { user } } = await supabase.auth.getUser();
   const invoiceNumber = `INV-${String(orderId).padStart(5, '0')}`;
@@ -314,7 +294,7 @@ export async function closeOrder(orderId: number): Promise<Invoice> {
 // Products
 // ============================================================
 export async function listProducts(search?: string): Promise<Product[]> {
-  let query = supabase.from('products').select('*').order('name');
+  let query = supabase.from('products').select('id, name, barcode, selling_price, cost_price, stock, category, image, low_stock_limit').order('name');
   if (search) {
     query = query.or(`name.ilike.%${search}%,barcode.ilike.%${search}%`);
   }
@@ -400,7 +380,7 @@ export async function deleteProduct(id: number): Promise<void> {
 // Inventory
 // ============================================================
 export async function listInventory(): Promise<InventoryRow[]> {
-  const { data } = await supabase.from('products').select('*').order('name');
+  const { data } = await supabase.from('products').select('id, name, barcode, stock, selling_price, low_stock_limit').order('name');
   return (data ?? []).map((p) => ({
     productId: p.id,
     name: p.name,
@@ -418,7 +398,7 @@ export async function listInventory(): Promise<InventoryRow[]> {
 export async function listSales(): Promise<Sale[]> {
   const { data } = await supabase
     .from('sales')
-    .select('*, rooms(name), users(name)')
+    .select('id, invoice_number, total, created_at, room_id, rooms!sales_room_id_fkey(name), users!sales_employee_id_fkey(name)')
     .order('created_at', { ascending: false });
   return (data ?? []).map((sale) => {
     const d = new Date(sale.created_at);
@@ -437,7 +417,7 @@ export async function listSales(): Promise<Sale[]> {
 export async function getSale(saleId: number): Promise<Invoice | null> {
   const { data: sale } = await supabase
     .from('sales')
-    .select('*')
+    .select('id, invoice_number, order_id')
     .eq('id', saleId)
     .single();
   if (!sale) return null;
@@ -463,20 +443,18 @@ export async function getDashboard(): Promise<Dashboard> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
 
-  const { data: todaySales } = await supabase
-    .from('sales')
-    .select('total')
-    .gte('created_at', today.toISOString());
-
-  const { data: products } = await supabase.from('products').select('stock, low_stock_limit');
-  const rooms = await listRooms();
+  const [salesRes, productsRes, rooms] = await Promise.all([
+    supabase.from('sales').select('total').gte('created_at', today.toISOString()),
+    supabase.from('products').select('stock, low_stock_limit'),
+    listRooms(),
+  ]);
 
   return {
-    todaySales: todaySales?.reduce((sum, s) => sum + num(s.total), 0) ?? 0,
-    todayOrders: todaySales?.length ?? 0,
+    todaySales: salesRes.data?.reduce((sum, s) => sum + num(s.total), 0) ?? 0,
+    todayOrders: salesRes.data?.length ?? 0,
     todayItems: 0,
-    lowStockCount: products?.filter((p) => p.stock <= p.low_stock_limit).length ?? 0,
-    monthSales: todaySales?.reduce((sum, s) => sum + num(s.total), 0) ?? 0,
+    lowStockCount: productsRes.data?.filter((p) => p.stock <= p.low_stock_limit).length ?? 0,
+    monthSales: salesRes.data?.reduce((sum, s) => sum + num(s.total), 0) ?? 0,
     rooms,
   };
 }
@@ -485,12 +463,15 @@ export async function getDashboard(): Promise<Dashboard> {
 // Reports
 // ============================================================
 export async function getReports(): Promise<Reports> {
-  const { data: sales } = await supabase.from('sales').select('*');
-  const { data: rooms } = await supabase.from('rooms').select('*');
-  const { data: products } = await supabase.from('products').select('*');
-  const { data: users } = await supabase.from('users').select('*');
+  const [salesRes, roomsRes, productsRes, usersRes] = await Promise.all([
+    supabase.from('sales').select('id, total, room_id, employee_id'),
+    supabase.from('rooms').select('id, name'),
+    supabase.from('products').select('name'),
+    supabase.from('users').select('id, name'),
+  ]);
 
-  const total = sales?.reduce((sum, s) => sum + num(s.total), 0) ?? 0;
+  const sales = salesRes.data ?? [];
+  const total = sales.reduce((sum, s) => sum + num(s.total), 0);
 
   return {
     today: total,
@@ -499,15 +480,15 @@ export async function getReports(): Promise<Reports> {
     month: total,
     totalItems: 0,
     totalRevenue: total,
-    byRoom: (rooms ?? []).map((room) => ({
+    byRoom: (roomsRes.data ?? []).map((room) => ({
       label: room.name,
-      value: sales?.filter((s) => s.room_id === room.id).reduce((sum, s) => sum + num(s.total), 0) ?? 0,
+      value: sales.filter((s) => s.room_id === room.id).reduce((sum, s) => sum + num(s.total), 0),
     })),
-    byEmployee: (users ?? []).map((user) => ({
+    byEmployee: (usersRes.data ?? []).map((user) => ({
       label: user.name,
-      value: sales?.filter((s) => s.employee_id === user.id).reduce((sum, s) => sum + num(s.total), 0) ?? 0,
+      value: sales.filter((s) => s.employee_id === user.id).reduce((sum, s) => sum + num(s.total), 0),
     })),
-    topProducts: (products ?? []).slice(0, 5).map((p) => ({
+    topProducts: (productsRes.data ?? []).slice(0, 5).map((p) => ({
       label: p.name,
       quantity: 0,
     })),
@@ -518,7 +499,7 @@ export async function getReports(): Promise<Reports> {
 // Users
 // ============================================================
 export async function listUsers(): Promise<UserProfile[]> {
-  const { data } = await supabase.from('users').select('*').order('name');
+  const { data } = await supabase.from('users').select('id, name, email, role, active').order('name');
   return (data ?? []) as UserProfile[];
 }
 
