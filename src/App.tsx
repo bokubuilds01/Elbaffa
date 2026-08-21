@@ -47,6 +47,7 @@ import {
   listRooms as apiListRooms,
   listSales as apiListSales,
   listUsers as apiListUsers,
+  deleteSale as apiDeleteSale,
   openRoomOrder as apiOpenRoomOrder,
   removeOrderItem as apiRemoveOrderItem,
   updateOrderItem as apiUpdateOrderItem,
@@ -1143,10 +1144,17 @@ function InventoryPage() {
 function SalesPage() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
+  const { isAdmin } = useAuth();
 
   useEffect(() => {
     apiListSales().then(setSales).finally(() => setLoading(false));
   }, []);
+
+  const removeSale = async (id: number) => {
+    if (!confirm('هل أنت متأكد من حذف هذه الفاتورة؟')) return;
+    await apiDeleteSale(id);
+    setSales((prev) => prev.filter((s) => s.id !== id));
+  };
 
   return (
     <>
@@ -1182,7 +1190,7 @@ function SalesPage() {
                   <th className="px-5 py-4">الموظف</th>
                   <th className="px-5 py-4">التاريخ</th>
                   <th className="px-5 py-4">الإجمالي</th>
-                  <th className="px-5 py-4" />
+                  {isAdmin && <th className="px-5 py-4">إجراء</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/80">
@@ -1212,6 +1220,17 @@ function SalesPage() {
                         <ChevronLeft size={16} />
                       </Link>
                     </td>
+                    {isAdmin && (
+                      <td className="px-5 py-4">
+                        <button
+                          onClick={() => removeSale(sale.id)}
+                          className="text-[10px] font-bold text-destructive hover:underline"
+                          data-testid={`button-delete-sale-${sale.id}`}
+                        >
+                          حذف
+                        </button>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>
@@ -1234,7 +1253,7 @@ function SaleDetailsPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    getSale(saleId).then(setSale).finally(() => setLoading(false));
+    apiGetSale(saleId).then(setSale).finally(() => setLoading(false));
   }, [saleId]);
 
   if (loading) return <Skeleton className="h-[400px]" />;
@@ -1434,7 +1453,7 @@ function UsersPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const data = await listUsers();
+    const data = await apiListUsers();
     setUsers(data);
     setLoading(false);
   }, []);

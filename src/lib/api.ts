@@ -452,6 +452,10 @@ export async function getSale(saleId: number): Promise<Invoice | null> {
   };
 }
 
+export async function deleteSale(id: number): Promise<void> {
+  await supabase.from('sales').delete().eq('id', id);
+}
+
 // ============================================================
 // Dashboard
 // ============================================================
