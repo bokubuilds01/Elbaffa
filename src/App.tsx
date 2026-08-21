@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation, useParams } from 'wouter';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { supabase } from '@/lib/supabase';
 import {
   addOrderItem as apiAddOrderItem,
   closeOrder as apiCloseOrder,
@@ -75,12 +76,25 @@ const integer = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 0 });
 // ============================================================
 
 function Logo({ invert = false }: { invert?: boolean }) {
-  const [customLogo, setCustomLogo] = useState<string | null>(() => localStorage.getItem('el-baffa-logo'));
+  const [customLogo, setCustomLogo] = useState<string | null>(null);
 
   useEffect(() => {
-    const handler = () => setCustomLogo(localStorage.getItem('el-baffa-logo'));
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const { data } = await supabase.from('site_settings').select('value').eq('key', 'logo_url').single();
+        if (!cancelled && data?.value) setCustomLogo(data.value);
+      } catch { /* no logo yet */ }
+    };
+    load();
+    const handler = async () => {
+      try {
+        const { data } = await supabase.from('site_settings').select('value').eq('key', 'logo_url').single();
+        if (!cancelled && data) setCustomLogo(data.value);
+      } catch { /* ignore */ }
+    };
     window.addEventListener('logo-updated', handler);
-    return () => window.removeEventListener('logo-updated', handler);
+    return () => { cancelled = true; window.removeEventListener('logo-updated', handler); };
   }, []);
 
   return (
@@ -1706,31 +1720,46 @@ function CreateUserForm({ onDone }: { onDone: () => void }) {
 
 function SettingsPage({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
   const { isAdmin, profile } = useAuth();
-  const [logo, setLogo] = useState<string | null>(() => localStorage.getItem('el-baffa-logo'));
+  const [logo, setLogo] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    supabase.from('site_settings').select('value').eq('key', 'logo_url').single()
+      .then(({ data }) => { if (data?.value) setLogo(data.value); })
+      .catch(() => {});
+  }, [isAdmin]);
 
   if (!isAdmin) {
     return <EmptyState title="غير مصرح" detail="هذه الصفحة متاحة لمديري النظام فقط." />;
   }
 
-  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    if (!file.type.startsWith('image/')) return;
+    if (!file || !file.type.startsWith('image/')) return;
+    setSaving(true);
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const dataUrl = reader.result as string;
-      localStorage.setItem('el-baffa-logo', dataUrl);
-      setLogo(dataUrl);
-      window.dispatchEvent(new Event('logo-updated'));
+      const { error } = await supabase
+        .from('site_settings')
+        .upsert({ key: 'logo_url', value: dataUrl, updated_at: new Date().toISOString() }, { onConflict: 'key' });
+      if (!error) {
+        setLogo(dataUrl);
+        window.dispatchEvent(new Event('logo-updated'));
+      }
+      setSaving(false);
     };
     reader.readAsDataURL(file);
   };
 
-  const handleRemoveLogo = () => {
-    localStorage.removeItem('el-baffa-logo');
+  const handleRemoveLogo = async () => {
+    setSaving(true);
+    await supabase.from('site_settings').upsert({ key: 'logo_url', value: null, updated_at: new Date().toISOString() }, { onConflict: 'key' });
     setLogo(null);
     window.dispatchEvent(new Event('logo-updated'));
+    setSaving(false);
   };
 
   return (
@@ -1745,7 +1774,7 @@ function SettingsPage({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: (
           <div className="rounded-xl border border-card-border bg-card p-5">
             <div className="mb-5">
               <h2 className="text-sm font-extrabold">الشعار</h2>
-              <p className="mt-1 text-[10px] text-muted-foreground">ارفع صورة لogo بدلاً من حروف EB في الشريط الجانبي.</p>
+              <p className="mt-1 text-[10px] text-muted-foreground">ارفع صورة لogo تظهر لجميع المستخدمين في الموقع.</p>
             </div>
             <div className="flex items-center gap-5">
               <div className="grid h-16 w-16 place-items-center rounded-xl bg-secondary">
@@ -1757,12 +1786,12 @@ function SettingsPage({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: (
               </div>
               <div className="space-y-2">
                 <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleUpload} />
-                <Button onClick={() => fileRef.current?.click()}>
+                <Button onClick={() => fileRef.current?.click()} disabled={saving}>
                   <Upload size={14} />
-                  ارفع شعار
+                  {saving ? 'جاري الحفظ...' : 'ارفع شعار'}
                 </Button>
                 {logo && (
-                  <Button variant="ghost" onClick={handleRemoveLogo} className="text-destructive">
+                  <Button variant="ghost" onClick={handleRemoveLogo} disabled={saving} className="text-destructive">
                     <Trash2 size={14} />
                     إزالة الشعار
                   </Button>
