@@ -251,18 +251,18 @@ function AuthPage() {
       <section className="hidden bg-[#171717] p-12 text-white lg:flex lg:flex-col lg:justify-between">
         <Logo invert />
         <div>
-          <Badge tone="red">EL BAFFA / الوصول الآمن</Badge>
+          <Badge tone="red">ELBAFFA</Badge>
           <h1 className="mt-7 max-w-lg text-4xl font-extrabold leading-[1.4]">
-            المناوبة تبدأ<br />
-            <span className="text-primary">من هنا.</span>
+            مرحباً بعودتك<br />
+            <span className="text-primary">سجّل الدخول.</span>
           </h1>
-          <p className="mt-5 max-w-sm text-xs leading-8 text-white/45">
-            بيانات المبيعات والمخزون في مركز واحد، بصلاحيات واضحة لكل فرد في الفريق.
-          </p>
+            <p className="mt-5 max-w-sm text-xs leading-8 text-white/45">
+              كل ما تحتاجه في مكان واحد.
+            </p>
         </div>
         <div className="flex items-center gap-2 text-[10px] text-white/35">
-          <ShieldCheck size={15} className="text-primary" />
-          جلسة عمل مشفرة ومحمية
+            <ShieldCheck size={15} className="text-primary" />
+            جلسة آمنة
         </div>
       </section>
       <section className="flex items-center justify-center px-5 py-10">
@@ -271,9 +271,9 @@ function AuthPage() {
             <Logo />
           </div>
           <div className="mb-8">
-            <p className="mb-3 text-[10px] font-bold tracking-[0.18em] text-primary">مركز العمليات</p>
+            <p className="mb-3 text-[10px] font-bold tracking-[0.18em] text-primary">ELBAFFA</p>
             <h1 className="text-2xl font-extrabold">مرحباً بعودتك</h1>
-            <p className="mt-2 text-xs text-muted-foreground">سجّل الدخول لمتابعة المناوبة.</p>
+            <p className="mt-2 text-xs text-muted-foreground">سجّل الدخول للمتابعة.</p>
           </div>
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
@@ -340,7 +340,7 @@ function Shell({ children, theme, onToggleTheme }: { children: ReactNode; theme:
             <X size={18} />
           </button>
         </div>
-        <div className="mb-3 px-3 text-[9px] font-bold tracking-[0.2em] text-white/35">محطة التشغيل</div>
+        <div className="mb-3 px-3 text-[9px] font-bold tracking-[0.2em] text-white/35">ELBAFFA</div>
         <nav className="space-y-1">
           {navItems.filter((item) => !item.admin || isAdmin).map((item) => {
             const Icon = item.icon;
@@ -386,7 +386,7 @@ function Shell({ children, theme, onToggleTheme }: { children: ReactNode; theme:
             <Menu size={21} />
           </button>
           <div className="hidden text-[10px] font-bold text-muted-foreground md:block">
-            EL BAFFA / مركز العمليات
+            EL BAFFA
           </div>
           <div className="mr-auto flex items-center gap-2 md:mr-0">
             <Button variant="ghost" className="h-9 min-h-9 px-3" onClick={onToggleTheme} data-testid="button-toggle-theme">
@@ -452,7 +452,7 @@ function DashboardPage() {
   return (
     <>
       <PageTitle
-        eyebrow="لوحة المناوبة / 01"
+        eyebrow="لوحة التحكم"
         title="نظرة عامة"
         detail="صورة حية لحركة المكان الآن."
         action={
@@ -640,9 +640,7 @@ function RoomPage() {
     setOrder({ ...order, items: newItems, total: newTotal });
     setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
     try {
-      const updated = await apiAddOrderItem(order.id, product.id, 1);
-      setOrder(updated);
-      setRoom((prev) => prev ? { ...prev, total: updated.total } : prev);
+      await apiAddOrderItem(order.id, product.id, 1);
     } catch (err) {
       console.error('Failed to add product:', err);
       loadOrder();
@@ -671,11 +669,9 @@ function RoomPage() {
 
     try {
       if (newQty < 1) {
-        const updated = await apiRemoveOrderItem(order.id, itemId);
-        setOrder(updated);
+        await apiRemoveOrderItem(order.id, itemId);
       } else {
-        const updated = await apiUpdateOrderItem(order.id, itemId, newQty);
-        setOrder(updated);
+        await apiUpdateOrderItem(order.id, itemId, newQty);
       }
     } catch (err) {
       console.error('Failed to update item:', err);
@@ -690,8 +686,7 @@ function RoomPage() {
     setOrder({ ...order, items: newItems, total: newTotal });
     setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
     try {
-      const updated = await apiRemoveOrderItem(order.id, itemId);
-      setOrder(updated);
+      await apiRemoveOrderItem(order.id, itemId);
     } catch (err) {
       console.error('Failed to remove item:', err);
       loadOrder();
@@ -760,7 +755,7 @@ function RoomPage() {
           </div>
         </div>
         <div className="text-left">
-          <span className="block text-[10px] text-muted-foreground">بدأت المناوبة</span>
+          <span className="block text-[10px] text-muted-foreground">وقت الفتح</span>
           <span className="font-mono-app text-xs">
             {new Date(order.createdAt).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
           </span>
@@ -1534,7 +1529,7 @@ function UsersPage() {
       <PageTitle
         eyebrow="الإدارة / الصلاحيات"
         title="المستخدمون"
-        detail="إدارة من يمكنه الوصول إلى مركز العمليات."
+        detail="إدارة صلاحيات الفريق."
         action={
           <Button onClick={() => setModal('create')} data-testid="button-invite-user">
             <Plus size={16} /> إضافة مستخدم
@@ -1697,7 +1692,7 @@ function CreateUserForm({ onDone }: { onDone: () => void }) {
 // ============================================================
 
 function SettingsPage({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
-  const { isAdmin } = useAuth();
+  const { isAdmin, profile } = useAuth();
   if (!isAdmin) {
     return <EmptyState title="غير مصرح" detail="هذه الصفحة متاحة لمديري النظام فقط." />;
   }
@@ -1750,7 +1745,7 @@ function SettingsPage({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: (
           <div className="rounded-xl border border-card-border bg-card p-5">
             <h2 className="text-sm font-extrabold">إعدادات التشغيل</h2>
             <div className="mt-5 divide-y divide-border/70">
-              {[['العملة', 'جنيه مصري (EGP)'], ['عدد الغرف', '11 غرفة ثابتة'], ['قارئ الباركود', 'متصل عبر USB'], ['النسخ الاحتياطي', 'Supabase Cloud']].map(([label, value]) => (
+              {[['العملة', 'جنيه مصري (EGP)'], ['عدد الغرف', '11 غرفة ثابتة'], ['قارئ الباركود', 'ادخل رقم الباركود يدوياً أو بالمسح'], ['펀장 الحساب', 'عند إغلاق الطلب يتم خصم المخزون تلقائياً']].map(([label, value]) => (
                 <div key={label} className="flex items-center justify-between py-3 text-xs">
                   <span className="text-muted-foreground">{label}</span>
                   <span className="font-bold">{value}</span>
@@ -1760,15 +1755,19 @@ function SettingsPage({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: (
           </div>
         </section>
         <section className="rounded-xl border border-card-border bg-card p-5">
-          <h2 className="text-sm font-extrabold">حول النظام</h2>
+          <h2 className="text-sm font-extrabold">معلومات الحساب</h2>
           <div className="mt-5 space-y-3 text-xs">
             <div className="flex justify-between">
               <span className="text-muted-foreground">الإصدار</span>
               <span className="font-mono-app">2.0.0</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">البنية التحتية</span>
-              <span>Cloudflare + Supabase</span>
+              <span className="text-muted-foreground">الاسم</span>
+              <span className="font-bold">{profile?.name ?? '—'}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">الصلاحية</span>
+              <Badge tone="red">{isAdmin ? 'مدير' : 'موظف'}</Badge>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">آخر تحديث</span>
@@ -1903,7 +1902,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
           <div className="min-h-[100dvh] bg-background p-10">
             <EmptyState
               title="الصفحة غير موجودة"
-              detail="العودة إلى مركز العمليات للوصول إلى الصفحات المتاحة."
+              detail="العودة إلى لوحة التحكم."
               action={
                 <Link
                   href="/dashboard"
