@@ -28,6 +28,7 @@ import {
   Sun,
   Trash2,
   TrendingUp,
+  Upload,
   Users,
   X,
 } from 'lucide-react';
@@ -74,11 +75,23 @@ const integer = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 0 });
 // ============================================================
 
 function Logo({ invert = false }: { invert?: boolean }) {
+  const [customLogo, setCustomLogo] = useState<string | null>(() => localStorage.getItem('el-baffa-logo'));
+
+  useEffect(() => {
+    const handler = () => setCustomLogo(localStorage.getItem('el-baffa-logo'));
+    window.addEventListener('logo-updated', handler);
+    return () => window.removeEventListener('logo-updated', handler);
+  }, []);
+
   return (
     <Link href="/dashboard" className="flex items-center gap-3" data-testid="link-brand-home">
-      <span className={cn('grid h-10 w-10 place-items-center rounded-xl text-lg font-black tracking-tighter', invert ? 'bg-[#f03e32] text-white' : 'bg-[#161616] text-white')}>
-        EB
-      </span>
+      {customLogo ? (
+        <img src={customLogo} alt="Logo" className="h-10 w-10 rounded-xl object-cover" />
+      ) : (
+        <span className={cn('grid h-10 w-10 place-items-center rounded-xl text-lg font-black tracking-tighter', invert ? 'bg-[#f03e32] text-white' : 'bg-[#161616] text-white')}>
+          EB
+        </span>
+      )}
       <span className={cn('text-[17px] font-extrabold tracking-[0.18em]', invert ? 'text-white' : 'text-foreground')}>
         EL BAFFA
       </span>
@@ -1693,9 +1706,32 @@ function CreateUserForm({ onDone }: { onDone: () => void }) {
 
 function SettingsPage({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () => void }) {
   const { isAdmin, profile } = useAuth();
+  const [logo, setLogo] = useState<string | null>(() => localStorage.getItem('el-baffa-logo'));
+  const fileRef = useRef<HTMLInputElement>(null);
+
   if (!isAdmin) {
     return <EmptyState title="غير مصرح" detail="هذه الصفحة متاحة لمديري النظام فقط." />;
   }
+
+  const handleUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = reader.result as string;
+      localStorage.setItem('el-baffa-logo', dataUrl);
+      setLogo(dataUrl);
+      window.dispatchEvent(new Event('logo-updated'));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveLogo = () => {
+    localStorage.removeItem('el-baffa-logo');
+    setLogo(null);
+    window.dispatchEvent(new Event('logo-updated'));
+  };
 
   return (
     <>
@@ -1706,6 +1742,34 @@ function SettingsPage({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: (
       />
       <div className="grid max-w-4xl gap-5 lg:grid-cols-[1fr_280px]">
         <section className="space-y-5">
+          <div className="rounded-xl border border-card-border bg-card p-5">
+            <div className="mb-5">
+              <h2 className="text-sm font-extrabold">الشعار</h2>
+              <p className="mt-1 text-[10px] text-muted-foreground">ارفع صورة لogo بدلاً من حروف EB في الشريط الجانبي.</p>
+            </div>
+            <div className="flex items-center gap-5">
+              <div className="grid h-16 w-16 place-items-center rounded-xl bg-secondary">
+                {logo ? (
+                  <img src={logo} alt="Logo" className="h-16 w-16 rounded-xl object-cover" />
+                ) : (
+                  <span className="text-lg font-black text-muted-foreground">EB</span>
+                )}
+              </div>
+              <div className="space-y-2">
+                <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={handleUpload} />
+                <Button onClick={() => fileRef.current?.click()}>
+                  <Upload size={14} />
+                  ارفع شعار
+                </Button>
+                {logo && (
+                  <Button variant="ghost" onClick={handleRemoveLogo} className="text-destructive">
+                    <Trash2 size={14} />
+                    إزالة الشعار
+                  </Button>
+                )}
+              </div>
+            </div>
+          </div>
           <div className="rounded-xl border border-card-border bg-card p-5">
             <div className="mb-5">
               <h2 className="text-sm font-extrabold">المظهر</h2>
