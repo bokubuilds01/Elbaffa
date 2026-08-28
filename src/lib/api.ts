@@ -84,9 +84,11 @@ export interface Reports {
   month: number;
   totalItems: number;
   totalRevenue: number;
+  hourly: number[];
   byRoom: Array<{ label: string; value: number }>;
   byEmployee: Array<{ label: string; value: number }>;
   topProducts: Array<{ label: string; quantity: number }>;
+  topProfit: Array<{ label: string; value: number }>;
 }
 
 export interface UserProfile {
@@ -168,6 +170,31 @@ export async function listRooms(): Promise<Room[]> {
       orderId: order?.id ?? null,
     };
   });
+}
+
+export async function createRoom(name: string): Promise<Room> {
+  const { data, error } = await supabase
+    .from('rooms')
+    .insert({ name })
+    .select()
+    .single();
+  if (error) {
+    if (String(error.message).includes('duplicate')) throw new Error('اسم الغرفة موجود بالفعل');
+    throw error;
+  }
+  return { id: data.id, name: data.name, status: 'available', total: 0, orderId: null };
+}
+
+export async function deleteRoom(id: number): Promise<void> {
+  const { data: openOrder } = await supabase
+    .from('orders')
+    .select('id')
+    .eq('room_id', id)
+    .eq('status', 'open')
+    .limit(1)
+    .maybeSingle();
+  if (openOrder) throw new Error('لا يمكن حذف غرفة بها طلب مفتوح');
+  await supabase.from('rooms').delete().eq('id', id);
 }
 
 // ============================================================
@@ -506,35 +533,90 @@ export async function getDashboard(): Promise<Dashboard> {
 // Reports
 // ============================================================
 export async function getReports(): Promise<Reports> {
-  const [salesRes, roomsRes, productsRes, usersRes] = await Promise.all([
-    supabase.from('sales').select('id, total, room_id, employee_id'),
+  const now = new Date();
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  const startOfWeek = new Date(startOfDay);
+  startOfWeek.setDate(startOfWeek.getDate() - 6);
+
+  const [salesRes, roomsRes, usersRes, ordersRes] = await Promise.all([
+    supabase.from('sales').select('id, total, room_id, employee_id, created_at').gte('created_at', startOfMonth.toISOString()),
     supabase.from('rooms').select('id, name'),
-    supabase.from('products').select('name'),
     supabase.from('users').select('id, name'),
+    supabase.from('orders').select('status, order_items(quantity, unit_price, products(name, cost_price))').eq('status', 'closed'),
   ]);
 
   const sales = salesRes.data ?? [];
-  const total = sales.reduce((sum, s) => sum + num(s.total), 0);
+  const num = (v: any) => Number(v ?? 0);
+  const sumIn = (from: Date, to: Date) =>
+    sales
+      .filter((s) => {
+        const d = new Date(s.created_at);
+        return d >= from && d <= to;
+      })
+      .reduce((acc, s) => acc + num(s.total), 0);
+
+  const yesterday = new Date(startOfDay);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const yesterdayEnd = new Date(startOfDay);
+  yesterdayEnd.setMilliseconds(-1);
+
+  const productsMap = new Map<string, { label: string; quantity: number; profit: number }>();
+  let totalItems = 0;
+  for (const order of ordersRes.data ?? []) {
+    for (const item of order.order_items ?? []) {
+      const qty = num(item.quantity);
+      const unitPrice = num(item.unit_price);
+      const cost = num(item.products?.cost_price);
+      const name = item.products?.name ?? 'منتج';
+      totalItems += qty;
+      const entry = productsMap.get(name) ?? { label: name, quantity: 0, profit: 0 };
+      entry.quantity += qty;
+      entry.profit += (unitPrice - cost) * qty;
+      productsMap.set(name, entry);
+    }
+  }
+
+  const orderedBefore = [...productsMap.values()].sort((a, b) => b.quantity - a.quantity).slice(0, 10);
+  const topProducts = orderedBefore.map(({ label, quantity }) => ({ label, quantity }));
+  const topProfit = [...productsMap.values()].sort((a, b) => b.profit - a.profit).slice(0, 10).map(({ label, profit }) => ({ label, value: profit }));
+
+  const hourly = Array.from({ length: 12 }, () => 0);
+  const hourMs = 60 * 60 * 1000;
+  for (const s of sales) {
+    const dx = (now.getTime() - new Date(s.created_at).getTime()) / hourMs;
+    if (dx >= 0 && dx < 12) {
+      hourly[Math.floor(dx)] += num(s.total);
+    }
+  }
+  hourly.reverse();
 
   return {
-    today: total,
-    yesterday: 0,
-    week: total,
-    month: total,
-    totalItems: 0,
-    totalRevenue: total,
-    byRoom: (roomsRes.data ?? []).map((room) => ({
-      label: room.name,
-      value: sales.filter((s) => s.room_id === room.id).reduce((sum, s) => sum + num(s.total), 0),
-    })),
-    byEmployee: (usersRes.data ?? []).map((user) => ({
-      label: user.name,
-      value: sales.filter((s) => s.employee_id === user.id).reduce((sum, s) => sum + num(s.total), 0),
-    })),
-    topProducts: (productsRes.data ?? []).slice(0, 5).map((p) => ({
-      label: p.name,
-      quantity: 0,
-    })),
+    today: sumIn(startOfDay, now),
+    yesterday: sumIn(yesterday, yesterdayEnd),
+    week: sumIn(startOfWeek, now),
+    month: sumIn(startOfMonth, now),
+    totalItems,
+    totalRevenue: sales.reduce((sum, s) => sum + num(s.total), 0),
+    hourly,
+    byRoom: (roomsRes.data ?? [])
+      .map((room) => ({
+        label: room.name,
+        value: sales
+          .filter((s) => s.room_id === room.id)
+          .reduce((sum, s) => sum + num(s.total), 0),
+      }))
+      .filter((r) => r.value > 0),
+    byEmployee: (usersRes.data ?? [])
+      .map((user) => ({
+        label: user.name,
+        value: sales
+          .filter((s) => s.employee_id === user.id)
+          .reduce((sum, s) => sum + num(s.total), 0),
+      }))
+      .filter((r) => r.value > 0),
+    topProducts,
+    topProfit,
   };
 }
 
@@ -550,13 +632,15 @@ export async function createUser(input: { name: string; email: string; password:
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email: input.email,
     password: input.password,
+    options: { data: { name: input.name, role: input.role } },
   });
   if (authError) throw authError;
+  if (!authData.user) throw new Error('لم يتم إنشاء الحساب، حاول مرة أخرى');
 
   const { data, error } = await supabase
     .from('users')
     .insert({
-      id: authData.user!.id,
+      id: authData.user.id,
       name: input.name,
       email: input.email,
       role: input.role,

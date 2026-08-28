@@ -51,6 +51,8 @@ import {
   deleteSale as apiDeleteSale,
   openRoomOrder as apiOpenRoomOrder,
   syncOrderItems as apiSyncOrderItems,
+  createRoom as apiCreateRoom,
+  deleteRoom as apiDeleteRoom,
   updateProduct as apiUpdateProduct,
   type Dashboard,
   type Invoice,
@@ -442,6 +444,7 @@ function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [confirmRoom, setConfirmRoom] = useState<Room | null>(null);
   const [opening, setOpening] = useState(false);
+  const [showAddRoom, setShowAddRoom] = useState(false);
   const { profile, isAdmin } = useAuth();
 
   const load = useCallback(async () => {
@@ -474,6 +477,17 @@ function DashboardPage() {
     setOpening(false);
   };
 
+  const handleDeleteRoom = async (room: Room) => {
+    if (!isAdmin) return;
+    if (!confirm(`هل أنت متأكد من حذف ${room.name}؟`)) return;
+    try {
+      await apiDeleteRoom(room.id);
+      await load();
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء الحذف');
+    }
+  };
+
   return (
     <>
       <PageTitle
@@ -481,9 +495,16 @@ function DashboardPage() {
         title="نظرة عامة"
         detail="صورة حية لحركة المكان الآن."
         action={
-          <Button onClick={load} variant="soft" data-testid="button-refresh-dashboard">
-            <RefreshCw size={15} /> تحديث البيانات
-          </Button>
+          <div className="flex gap-2">
+            {isAdmin && (
+              <Button onClick={() => setShowAddRoom(true)} variant="soft" data-testid="button-add-room">
+                <Plus size={15} /> إضافة غرفة
+              </Button>
+            )}
+            <Button onClick={load} variant="soft" data-testid="button-refresh-dashboard">
+              <RefreshCw size={15} /> تحديث البيانات
+            </Button>
+          </div>
         }
       />
       <div className="mb-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -516,7 +537,7 @@ function DashboardPage() {
       <section className="rounded-xl border border-card-border bg-card p-5 md:p-6">
         <div className="mb-5 flex items-center justify-between">
           <div>
-            <h2 className="text-sm font-extrabold">الغرف / 11 نقطة بيع</h2>
+            <h2 className="text-sm font-extrabold">الغرف / {rooms.length} نقطة بيع</h2>
             <p className="mt-1 text-[10px] text-muted-foreground">اختر غرفة لفتح الطلب أو متابعة الحساب</p>
           </div>
           <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
@@ -534,7 +555,7 @@ function DashboardPage() {
           </div>
         ) : (
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-            {rooms.map((room) => <RoomCard key={room.id} room={room} onOpen={openRoom} />)}
+            {rooms.map((room) => <RoomCard key={room.id} room={room} onOpen={openRoom} onDelete={isAdmin ? handleDeleteRoom : undefined} />)}
           </div>
         )}
       </section>
@@ -558,6 +579,9 @@ function DashboardPage() {
           </div>
         </Modal>
       )}
+      {showAddRoom && (
+        <AddRoomModal onClose={() => setShowAddRoom(false)} onAdded={() => { setShowAddRoom(false); load(); }} />
+      )}
     </>
   );
 }
@@ -566,7 +590,7 @@ function DashboardPage() {
 // Room Card
 // ============================================================
 
-function RoomCard({ room, onOpen }: { room: Room; onOpen: (room: Room) => void }) {
+function RoomCard({ room, onOpen, onDelete }: { room: Room; onOpen: (room: Room) => void; onDelete?: (room: Room) => void }) {
   const open = room.status === 'open';
   return (
     <button
@@ -577,6 +601,19 @@ function RoomCard({ room, onOpen }: { room: Room; onOpen: (room: Room) => void }
       )}
       data-testid={`card-room-${room.id}`}
     >
+      {onDelete && (
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={(e) => { e.stopPropagation(); onDelete(room); }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); onDelete(room); } }}
+          className="absolute top-4 left-4 z-10 grid h-6 w-6 place-items-center rounded-md bg-black/5 text-muted-foreground opacity-0 transition hover:bg-destructive hover:text-white group-hover:opacity-100"
+          title="حذف الغرفة"
+          data-testid={`button-delete-room-${room.id}`}
+        >
+          <Trash2 size={12} />
+        </span>
+      )}
       <div className="flex items-start justify-between">
         <span className={cn('grid h-9 w-9 place-items-center rounded-lg text-xs font-black', open ? 'bg-primary text-white' : 'bg-secondary text-muted-foreground')}>
           {String(room.id).padStart(2, '0')}
@@ -599,6 +636,51 @@ function RoomCard({ room, onOpen }: { room: Room; onOpen: (room: Room) => void }
       </div>
       <ChevronLeft size={16} className="absolute bottom-4 left-4 text-muted-foreground/50 transition-transform group-hover:-translate-x-1" />
     </button>
+  );
+}
+
+function AddRoomModal({ onClose, onAdded }: { onClose: () => void; onAdded: () => void }) {
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    setError('');
+    try {
+      await apiCreateRoom(name.trim());
+      onAdded();
+    } catch (err: any) {
+      setError(err.message || 'حدث خطأ أثناء إضافة الغرفة');
+    }
+    setSaving(false);
+  };
+
+  return (
+    <Modal title="إضافة غرفة جديدة" onClose={onClose}>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && (
+          <div className="rounded-lg bg-destructive/10 p-3 text-xs text-destructive">{error}</div>
+        )}
+        <label className="block text-xs font-bold">
+          اسم الغرفة
+          <input
+            autoFocus
+            className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-xs outline-none focus:border-primary"
+            placeholder="غرفة 12"
+            required
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            data-testid="input-room-name"
+          />
+        </label>
+        <Button type="submit" className="w-full" disabled={saving}>
+          {saving ? 'جارِ الإضافة...' : 'إضافة الغرفة'}
+          <Plus size={15} />
+        </Button>
+      </form>
+    </Modal>
   );
 }
 
@@ -1443,8 +1525,13 @@ function ReportsPage() {
     apiGetReports().then(setReports).finally(() => setLoading(false));
   }, []);
 
-  const r = reports ?? { today: 0, yesterday: 0, week: 0, month: 0, totalItems: 0, totalRevenue: 0, byRoom: [], byEmployee: [], topProducts: [] };
-  const bars = [42, 68, 55, 78, 48, 88, 72, 61, 92, 65, 76, 81];
+  const r = reports ?? { today: 0, yesterday: 0, week: 0, month: 0, totalItems: 0, totalRevenue: 0, hourly: [], byRoom: [], byEmployee: [], topProducts: [], topProfit: [] };
+  const maxHour = Math.max(...r.hourly, 1);
+  const hours = r.hourly.map((v) => Math.round((v / maxHour) * 100));
+  const labels = r.hourly.map((_, i) => {
+    const d = new Date(Date.now() - (11 - i) * 3600 * 1000);
+    return `${String(d.getHours()).padStart(2, '0')}:00`;
+  });
 
   return (
     <>
@@ -1464,7 +1551,7 @@ function ReportsPage() {
         <StatCard
           label="هذا الأسبوع"
           value={money.format(r.week)}
-          detail="من السبت إلى اليوم"
+          detail="آخر 7 أيام"
           icon={BarChart3}
         />
         <StatCard
@@ -1487,30 +1574,30 @@ function ReportsPage() {
               <h2 className="text-sm font-extrabold">إيقاع المبيعات</h2>
               <p className="mt-1 text-[10px] text-muted-foreground">آخر 12 ساعة تشغيل</p>
             </div>
+            <Badge tone="neutral">{money.format(r.hourly.reduce((a, b) => a + b, 0))}</Badge>
           </div>
           <div className="mt-10 flex h-48 items-end gap-2 border-b border-border px-2">
-            {bars.map((height, i) => (
-              <div key={i} className="group relative flex-1">
+            {hours.map((height, i) => (
+              <div key={i} className="group relative flex-1" title={`${money.format(r.hourly[i] ?? 0)}`}>
                 <div className="absolute -top-6 left-1/2 hidden -translate-x-1/2 rounded bg-foreground px-2 py-1 font-mono-app text-[8px] text-background group-hover:block">
-                  {height * 120}
+                  {money.format(r.hourly[i] ?? 0)}
                 </div>
                 <div
-                  className={cn('w-full rounded-t-sm transition-all group-hover:bg-primary', i === 8 ? 'bg-primary' : 'bg-primary/25')}
-                  style={{ height: `${height}%` }}
+                  className={cn('w-full rounded-t-sm transition-all group-hover:bg-primary', (r.hourly[i] ?? 0) > 0 ? 'bg-primary/60' : 'bg-primary/10')}
+                  style={{ height: `${Math.max(height, 2)}%` }}
                 />
               </div>
             ))}
           </div>
           <div className="mt-3 flex justify-between px-1 font-mono-app text-[9px] text-muted-foreground">
-            <span>12:00</span>
-            <span>16:00</span>
-            <span>20:00</span>
-            <span>00:00</span>
+            {labels.map((label, i) => (
+              <span key={i}>{label}</span>
+            ))}
           </div>
         </section>
         <div className="space-y-5">
           <ReportList title="الأكثر مبيعاً" items={r.topProducts} suffix="قطعة" />
-          <ReportList title="الأكثر ربحاً" items={r.byEmployee} suffix="" moneyValue />
+          <ReportList title="الأكثر ربحاً" items={r.topProfit} suffix="" moneyValue />
           <ReportList title="أداء الغرف" items={r.byRoom} suffix="" moneyValue />
         </div>
       </div>
@@ -1847,7 +1934,7 @@ function SettingsPage({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: (
           <div className="rounded-xl border border-card-border bg-card p-5">
             <h2 className="text-sm font-extrabold">إعدادات التشغيل</h2>
             <div className="mt-5 divide-y divide-border/70">
-              {[['العملة', 'جنيه مصري (EGP)'], ['عدد الغرف', '11 غرفة ثابتة'], ['قارئ الباركود', 'ادخل رقم الباركود يدوياً أو بالمسح'], ['펀장 الحساب', 'عند إغلاق الطلب يتم خصم المخزون تلقائياً']].map(([label, value]) => (
+              {[['العملة', 'جنيه مصري (EGP)'], ['الغرف', 'يمكن إضافة أو حذف غرف من لوحة التحكم'], ['قارئ الباركود', 'ادخل رقم الباركود يدوياً أو بالمسح'], ['المخزون', 'عند إغلاق الطلب يتم خصم المخزون تلقائياً']].map(([label, value]) => (
                 <div key={label} className="flex items-center justify-between py-3 text-xs">
                   <span className="text-muted-foreground">{label}</span>
                   <span className="font-bold">{value}</span>
