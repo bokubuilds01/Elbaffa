@@ -629,6 +629,8 @@ export async function listUsers(): Promise<UserProfile[]> {
 }
 
 export async function createUser(input: { name: string; email: string; password: string; role: 'admin' | 'employee' }): Promise<UserProfile> {
+  const { data: { session: adminSession } } = await supabase.auth.getSession();
+
   const { data: authData, error: authError } = await supabase.auth.signUp({
     email: input.email,
     password: input.password,
@@ -636,6 +638,13 @@ export async function createUser(input: { name: string; email: string; password:
   });
   if (authError) throw authError;
   if (!authData.user) throw new Error('لم يتم إنشاء الحساب، حاول مرة أخرى');
+
+  if (adminSession) {
+    await supabase.auth.setSession({
+      access_token: adminSession.access_token,
+      refresh_token: adminSession.refresh_token,
+    });
+  }
 
   const { data, error } = await supabase
     .from('users')

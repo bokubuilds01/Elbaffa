@@ -227,10 +227,10 @@ function StatCard({ label, value, detail, icon: Icon, accent = false }: { label:
 
 const navItems = [
   { href: '/dashboard', label: 'نظرة عامة', icon: Home },
-  { href: '/inventory', label: 'المخزون', icon: Boxes },
+  { href: '/inventory', label: 'المخزون', icon: Boxes, admin: true },
   { href: '/products', label: 'المنتجات', icon: Package, admin: true },
-  { href: '/sales', label: 'المبيعات', icon: ShoppingBasket },
-  { href: '/reports', label: 'التقارير', icon: FileBarChart },
+  { href: '/sales', label: 'المبيعات', icon: ShoppingBasket, admin: true },
+  { href: '/reports', label: 'التقارير', icon: FileBarChart, admin: true },
   { href: '/users', label: 'المستخدمون', icon: Users, admin: true },
   { href: '/settings', label: 'الإعدادات', icon: Settings, admin: true },
 ];
@@ -371,6 +371,7 @@ function Shell({ children, theme, onToggleTheme }: { children: ReactNode; theme:
         <nav className="space-y-1">
           {navItems.filter((item) => !item.admin || isAdmin).map((item) => {
             const Icon = item.icon;
+            const label = item.href === '/dashboard' && !isAdmin ? 'الغرف' : item.label;
             const active = location === item.href || (item.href !== '/dashboard' && location.startsWith(item.href));
             return (
               <Link
@@ -382,7 +383,7 @@ function Shell({ children, theme, onToggleTheme }: { children: ReactNode; theme:
               >
                 <span className="flex items-center gap-3">
                   <Icon size={17} strokeWidth={active ? 2.5 : 1.8} />
-                  {item.label}
+                  {label}
                 </span>
                 {item.admin && <LockKeyhole size={12} className={active ? 'text-white/70' : 'text-white/25'} />}
               </Link>
@@ -491,9 +492,9 @@ function DashboardPage() {
   return (
     <>
       <PageTitle
-        eyebrow="لوحة التحكم"
-        title="نظرة عامة"
-        detail="صورة حية لحركة المكان الآن."
+        eyebrow={isAdmin ? 'لوحة التحكم' : 'الغرف'}
+        title={isAdmin ? 'نظرة عامة' : 'نقاط البيع'}
+        detail={isAdmin ? 'صورة حية لحركة المكان الآن.' : 'اختر غرفة لفتح الطلب أو متابعة الحساب.'}
         action={
           <div className="flex gap-2">
             {isAdmin && (
@@ -507,33 +508,35 @@ function DashboardPage() {
           </div>
         }
       />
-      <div className="mb-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          label="مبيعات اليوم"
-          value={money.format(data?.todaySales ?? 0)}
-          detail="إجمالي اليوم الحالي"
-          icon={TrendingUp}
-          accent
-        />
-        <StatCard
-          label="طلبات مغلقة"
-          value={integer.format(data?.todayOrders ?? 0)}
-          detail={`${openCount} طلبات مفتوحة حالياً`}
-          icon={ShoppingBasket}
-        />
-        <StatCard
-          label="الأصناف المباعة"
-          value={integer.format(data?.todayItems ?? 0)}
-          detail="إجمالي الأصناف المباعة"
-          icon={Package}
-        />
-        <StatCard
-          label="تنبيهات المخزون"
-          value={integer.format(data?.lowStockCount ?? 0)}
-          detail="تحتاج إلى مراجعة اليوم"
-          icon={CircleAlert}
-        />
-      </div>
+      {isAdmin && (
+        <div className="mb-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <StatCard
+            label="مبيعات اليوم"
+            value={money.format(data?.todaySales ?? 0)}
+            detail="إجمالي اليوم الحالي"
+            icon={TrendingUp}
+            accent
+          />
+          <StatCard
+            label="طلبات مغلقة"
+            value={integer.format(data?.todayOrders ?? 0)}
+            detail={`${openCount} طلبات مفتوحة حالياً`}
+            icon={ShoppingBasket}
+          />
+          <StatCard
+            label="الأصناف المباعة"
+            value={integer.format(data?.todayItems ?? 0)}
+            detail="إجمالي الأصناف المباعة"
+            icon={Package}
+          />
+          <StatCard
+            label="تنبيهات المخزون"
+            value={integer.format(data?.lowStockCount ?? 0)}
+            detail="تحتاج إلى مراجعة اليوم"
+            icon={CircleAlert}
+          />
+        </div>
+      )}
       <section className="rounded-xl border border-card-border bg-card p-5 md:p-6">
         <div className="mb-5 flex items-center justify-between">
           <div>
@@ -2022,7 +2025,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
       </Route>
       <Route path="/products">
         {() => (
-          <ProtectedRoute>
+          <ProtectedRoute adminOnly>
             <Shell theme={theme} onToggleTheme={onToggleTheme}>
               <ProductsPage />
             </Shell>
@@ -2031,7 +2034,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
       </Route>
       <Route path="/inventory">
         {() => (
-          <ProtectedRoute>
+          <ProtectedRoute adminOnly>
             <Shell theme={theme} onToggleTheme={onToggleTheme}>
               <InventoryPage />
             </Shell>
@@ -2040,7 +2043,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
       </Route>
       <Route path="/sales">
         {() => (
-          <ProtectedRoute>
+          <ProtectedRoute adminOnly>
             <Shell theme={theme} onToggleTheme={onToggleTheme}>
               <SalesPage />
             </Shell>
@@ -2049,7 +2052,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
       </Route>
       <Route path="/sales/:saleId">
         {() => (
-          <ProtectedRoute>
+          <ProtectedRoute adminOnly>
             <Shell theme={theme} onToggleTheme={onToggleTheme}>
               <SaleDetailsPage />
             </Shell>
@@ -2058,7 +2061,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
       </Route>
       <Route path="/reports">
         {() => (
-          <ProtectedRoute>
+          <ProtectedRoute adminOnly>
             <Shell theme={theme} onToggleTheme={onToggleTheme}>
               <ReportsPage />
             </Shell>
