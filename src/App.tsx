@@ -36,7 +36,6 @@ import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation, use
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
 import {
-  addOrderItem as apiAddOrderItem,
   closeOrder as apiCloseOrder,
   createProduct as apiCreateProduct,
   deleteProduct as apiDeleteProduct,
@@ -51,8 +50,7 @@ import {
   listUsers as apiListUsers,
   deleteSale as apiDeleteSale,
   openRoomOrder as apiOpenRoomOrder,
-  removeOrderItem as apiRemoveOrderItem,
-  updateOrderItem as apiUpdateOrderItem,
+  syncOrderItems as apiSyncOrderItems,
   updateProduct as apiUpdateProduct,
   type Dashboard,
   type Invoice,
@@ -619,6 +617,30 @@ function RoomPage() {
   const [search, setSearch] = useState('');
   const [barcode, setBarcode] = useState('');
   const barcodeRef = useRef<HTMLInputElement>(null);
+  const orderRef = useRef<Order | null>(null);
+  const syncTimer = useRef<number | null>(null);
+
+  useEffect(() => { orderRef.current = order; }, [order]);
+  useEffect(() => () => { if (syncTimer.current) window.clearTimeout(syncTimer.current); }, []);
+
+  const syncNow = async () => {
+    const current = orderRef.current;
+    if (!current) return;
+    const snapshot = current.items.map((i) => ({ productId: i.productId, quantity: i.quantity }));
+    try {
+      const fresh = await apiSyncOrderItems(current.id, snapshot);
+      orderRef.current = fresh;
+      setOrder(fresh);
+    } catch (err) {
+      console.error('Failed to sync order:', err);
+      loadOrder();
+    }
+  };
+
+  const scheduleSync = () => {
+    if (syncTimer.current) window.clearTimeout(syncTimer.current);
+    syncTimer.current = window.setTimeout(syncNow, 600);
+  };
 
   const loadOrder = useCallback(async () => {
     try {
@@ -650,74 +672,59 @@ function RoomPage() {
     p.name.includes(search) || p.category.includes(search)
   );
 
-  const addProduct = async (product: Product) => {
-    if (!order) return;
-    const existingItem = order.items.find((i) => i.productId === product.id);
+  const addProduct = (product: Product) => {
+    const current = orderRef.current;
+    if (!current) return;
+    const existingItem = current.items.find((i) => i.productId === product.id);
     let newItems: OrderItem[];
     if (existingItem) {
-      newItems = order.items.map((i) =>
+      newItems = current.items.map((i) =>
         i.id === existingItem.id
           ? { ...i, quantity: i.quantity + 1, total: (i.quantity + 1) * i.unitPrice }
           : i,
       );
     } else {
-      newItems = [...order.items, { id: Date.now(), productId: product.id, name: product.name, quantity: 1, unitPrice: product.sellingPrice, total: product.sellingPrice }];
+      newItems = [...current.items, { id: Date.now(), productId: product.id, name: product.name, quantity: 1, unitPrice: product.sellingPrice, total: product.sellingPrice }];
     }
     const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
-    setOrder({ ...order, items: newItems, total: newTotal });
+    const updated: Order = { ...current, items: newItems, total: newTotal };
+    orderRef.current = updated;
+    setOrder(updated);
     setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
-    try {
-      await apiAddOrderItem(order.id, product.id, 1);
-    } catch (err) {
-      console.error('Failed to add product:', err);
-      loadOrder();
-    }
+    scheduleSync();
   };
 
-  const updateQuantity = async (itemId: number, delta: number) => {
-    if (!order) return;
-    const item = order.items.find((i) => i.id === itemId);
+  const updateQuantity = (itemId: number, delta: number) => {
+    const current = orderRef.current;
+    if (!current) return;
+    const item = current.items.find((i) => i.id === itemId);
     if (!item) return;
     const newQty = item.quantity + delta;
 
-    if (newQty < 1) {
-      const newItems = order.items.filter((i) => i.id !== itemId);
-      const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
-      setOrder({ ...order, items: newItems, total: newTotal });
-      setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
-    } else {
-      const newItems = order.items.map((i) =>
-        i.id === itemId ? { ...i, quantity: newQty, total: newQty * i.unitPrice } : i,
-      );
-      const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
-      setOrder({ ...order, items: newItems, total: newTotal });
-      setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
-    }
+    const compute = (items: OrderItem[]) =>
+      newQty < 1
+        ? items.filter((i) => i.id !== itemId)
+        : items.map((i) => (i.id === itemId ? { ...i, quantity: newQty, total: newQty * i.unitPrice } : i));
 
-    try {
-      if (newQty < 1) {
-        await apiRemoveOrderItem(order.id, itemId);
-      } else {
-        await apiUpdateOrderItem(order.id, itemId, newQty);
-      }
-    } catch (err) {
-      console.error('Failed to update item:', err);
-      loadOrder();
-    }
+    const newItems = compute(current.items);
+    const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
+    const updated: Order = { ...current, items: newItems, total: newTotal };
+    orderRef.current = updated;
+    setOrder(updated);
+    setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
+    scheduleSync();
   };
 
-  const removeItem = async (itemId: number) => {
-    if (!order) return;
-    const newItems = order.items.filter((i) => i.id !== itemId);
+  const removeItem = (itemId: number) => {
+    const current = orderRef.current;
+    if (!current) return;
+    const newItems = current.items.filter((i) => i.id !== itemId);
     const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
-    setOrder({ ...order, items: newItems, total: newTotal });
+    const updated: Order = { ...current, items: newItems, total: newTotal };
+    orderRef.current = updated;
+    setOrder(updated);
     setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
-    try {
-      await apiRemoveOrderItem(order.id, itemId);
-    } catch (err) {
-      console.error('Failed to remove item:', err);
-      loadOrder();
-    }
+    scheduleSync();
   };
 
   const handleBarcode = (e: React.FormEvent) => {
@@ -730,7 +737,9 @@ function RoomPage() {
   const closeOrder = async () => {
     if (!order) return;
     try {
-      await apiCloseOrder(order.id);
+      if (syncTimer.current) window.clearTimeout(syncTimer.current);
+      await syncNow();
+      await apiCloseOrder(orderRef.current?.id ?? order.id);
       setLocation('/sales');
     } catch (err: any) {
       alert(err.message || 'حدث خطأ أثناء إغلاق الطلب');

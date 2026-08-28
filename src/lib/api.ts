@@ -245,6 +245,49 @@ export async function removeOrderItem(orderId: number, itemId: number): Promise<
   return (await readOrder(orderId))!;
 }
 
+export async function syncOrderItems(orderId: number, items: Array<{ productId: number; quantity: number }>): Promise<Order> {
+  const { data: existing } = await supabase
+    .from('order_items')
+    .select('id, product_id')
+    .eq('order_id', orderId);
+
+  const existingByProduct = new Map<number, number>((existing ?? []).map((item: any) => [item.product_id, item.id]));
+
+  await Promise.all(
+    items.map(async ({ productId, quantity }) => {
+      const itemId = existingByProduct.get(productId);
+      if (itemId !== undefined) {
+        if (quantity < 1) {
+          await supabase.from('order_items').delete().eq('id', itemId);
+        } else {
+          await supabase.from('order_items').update({ quantity }).eq('id', itemId);
+        }
+        existingByProduct.delete(productId);
+      } else if (quantity > 0) {
+        const { data: product } = await supabase
+          .from('products')
+          .select('name, selling_price')
+          .eq('id', productId)
+          .single();
+        if (product) {
+          await supabase
+            .from('order_items')
+            .insert({ order_id: orderId, product_id: productId, quantity, unit_price: product.selling_price });
+        }
+      }
+    })
+  );
+
+  await Promise.all(
+    Array.from(existingByProduct.entries()).map(async ([productId, itemId]) => {
+      await supabase.from('order_items').delete().eq('id', itemId);
+    })
+  );
+
+  await recalcOrderTotal(orderId);
+  return (await readOrder(orderId))!;
+}
+
 export async function closeOrder(orderId: number): Promise<Invoice> {
   const { data: order } = await supabase
     .from('orders')
