@@ -639,24 +639,23 @@ export async function createUser(input: { name: string; email: string; password:
   if (authError) throw authError;
   if (!authData.user) throw new Error('لم يتم إنشاء الحساب، حاول مرة أخرى');
 
-  if (adminSession) {
-    await supabase.auth.setSession({
-      access_token: adminSession.access_token,
-      refresh_token: adminSession.refresh_token,
-    });
+  try {
+    if (adminSession) {
+      await supabase.auth.setSession({
+        access_token: adminSession.access_token,
+        refresh_token: adminSession.refresh_token,
+      });
+    }
+  } catch {
+    // Session restore is best-effort; the RPC below works regardless.
   }
 
-  const { data, error } = await supabase
-    .from('users')
-    .insert({
-      id: authData.user.id,
-      name: input.name,
-      email: input.email,
-      role: input.role,
-      active: true,
-    })
-    .select()
-    .single();
+  const { data, error } = await supabase.rpc('upsert_user_profile', {
+    p_id: authData.user.id,
+    p_name: input.name,
+    p_email: input.email,
+    p_role: input.role,
+  });
   if (error) throw error;
   return data as UserProfile;
 }
