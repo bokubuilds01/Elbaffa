@@ -371,7 +371,6 @@ function Shell({ children, theme, onToggleTheme }: { children: ReactNode; theme:
         <nav className="space-y-1">
           {navItems.filter((item) => !item.admin || isAdmin).map((item) => {
             const Icon = item.icon;
-            const label = item.href === '/dashboard' && !isAdmin ? 'الغرف' : item.label;
             const active = location === item.href || (item.href !== '/dashboard' && location.startsWith(item.href));
             return (
               <Link
@@ -383,7 +382,7 @@ function Shell({ children, theme, onToggleTheme }: { children: ReactNode; theme:
               >
                 <span className="flex items-center gap-3">
                   <Icon size={17} strokeWidth={active ? 2.5 : 1.8} />
-                  {label}
+                  {item.label}
                 </span>
                 {item.admin && <LockKeyhole size={12} className={active ? 'text-white/70' : 'text-white/25'} />}
               </Link>
@@ -492,9 +491,9 @@ function DashboardPage() {
   return (
     <>
       <PageTitle
-        eyebrow={isAdmin ? 'لوحة التحكم' : 'الغرف'}
-        title={isAdmin ? 'نظرة عامة' : 'نقاط البيع'}
-        detail={isAdmin ? 'صورة حية لحركة المكان الآن.' : 'اختر غرفة لفتح الطلب أو متابعة الحساب.'}
+        eyebrow="لوحة التحكم"
+        title="نظرة عامة"
+        detail="صورة حية لحركة المكان الآن."
         action={
           <div className="flex gap-2">
             {isAdmin && (
@@ -508,35 +507,33 @@ function DashboardPage() {
           </div>
         }
       />
-      {isAdmin && (
-        <div className="mb-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard
-            label="مبيعات اليوم"
-            value={money.format(data?.todaySales ?? 0)}
-            detail="إجمالي اليوم الحالي"
-            icon={TrendingUp}
-            accent
+      <div className="mb-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="مبيعات اليوم"
+          value={money.format(data?.todaySales ?? 0)}
+          detail={`الشهر الحالي: ${money.format(data?.monthSales ?? 0)}`}
+          icon={TrendingUp}
+          accent
+        />
+<StatCard
+            label="أرباح إجمالية"
+            value={money.format(data?.totalProfit ?? 0)}
+            detail="صافي الربح من الطلبات المغلقة"
+            icon={BarChart3}
           />
-          <StatCard
-            label="طلبات مغلقة"
-            value={integer.format(data?.todayOrders ?? 0)}
-            detail={`${openCount} طلبات مفتوحة حالياً`}
-            icon={ShoppingBasket}
-          />
-          <StatCard
-            label="الأصناف المباعة"
-            value={integer.format(data?.todayItems ?? 0)}
-            detail="إجمالي الأصناف المباعة"
-            icon={Package}
-          />
-          <StatCard
-            label="تنبيهات المخزون"
-            value={integer.format(data?.lowStockCount ?? 0)}
-            detail="تحتاج إلى مراجعة اليوم"
-            icon={CircleAlert}
-          />
-        </div>
-      )}
+        <StatCard
+          label="طلبات مغلقة"
+          value={integer.format(data?.todayOrders ?? 0)}
+          detail={`${openCount} طلبات مفتوحة حالياً`}
+          icon={ShoppingBasket}
+        />
+        <StatCard
+          label="الأصناف المباعة"
+          value={integer.format(data?.todayItems ?? 0)}
+          detail="إجمالي الأصناف المباعة اليوم"
+          icon={Package}
+        />
+      </div>
       <section className="rounded-xl border border-card-border bg-card p-5 md:p-6">
         <div className="mb-5 flex items-center justify-between">
           <div>
@@ -1632,7 +1629,7 @@ function ReportList({ title, items, suffix, moneyValue = false }: { title: strin
 // ============================================================
 
 function UsersPage() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, profile } = useAuth();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<'create' | null>(null);
@@ -1645,6 +1642,21 @@ function UsersPage() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const handleDelete = async (user: UserProfile) => {
+    if (profile && user.id === profile.id) {
+      alert('لا يمكنك حذف حسابك الحالي');
+      return;
+    }
+    if (!confirm(`هل أنت متأكد من حذف ${user.name}؟`)) return;
+    try {
+      const { deleteUser } = await import('@/lib/api');
+      await deleteUser(user.id);
+      await load();
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء الحذف');
+    }
+  };
 
   if (!isAdmin) {
     return <EmptyState title="غير مصرح" detail="هذه الصفحة متاحة لمديري النظام فقط." />;
@@ -1686,6 +1698,7 @@ function UsersPage() {
                   <th className="px-5 py-4">المستخدم</th>
                   <th className="px-5 py-4">الدور</th>
                   <th className="px-5 py-4">الحالة</th>
+                  <th className="px-5 py-4">إجراء</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border/80">
@@ -1711,6 +1724,16 @@ function UsersPage() {
                       <Badge tone={user.active ? 'success' : 'neutral'}>
                         {user.active ? 'نشط' : 'موقوف'}
                       </Badge>
+                    </td>
+                    <td className="px-5 py-4">
+                      <button
+                        onClick={() => handleDelete(user)}
+                        className="rounded-lg p-2 text-muted-foreground transition hover:bg-red-500/10 hover:text-red-500"
+                        aria-label={`حذف ${user.name}`}
+                        data-testid={`button-delete-user-${user.id}`}
+                      >
+                        <Trash2 size={15} />
+                      </button>
                     </td>
                   </tr>
                 ))}

@@ -74,6 +74,7 @@ export interface Dashboard {
   todayItems: number;
   lowStockCount: number;
   monthSales: number;
+  totalProfit: number;
   rooms: Room[];
 }
 
@@ -512,19 +513,40 @@ export async function deleteSale(id: number): Promise<void> {
 export async function getDashboard(): Promise<Dashboard> {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
 
-  const [salesRes, productsRes, rooms] = await Promise.all([
-    supabase.from('sales').select('total').gte('created_at', today.toISOString()),
+  const [salesRes, productsRes, rooms, closedOrders] = await Promise.all([
+    supabase.from('sales').select('total, created_at').gte('created_at', monthStart.toISOString()),
     supabase.from('products').select('stock, low_stock_limit'),
     listRooms(),
+    supabase.from('orders').select('created_at, order_items(quantity, unit_price, products(cost_price))').eq('status', 'closed'),
   ]);
 
+  const monthSales = salesRes.data ?? [];
+  const todaySales = monthSales.filter((s) => new Date(s.created_at) >= today)
+    .reduce((sum, s) => sum + num(s.total), 0);
+  const monthTotal = monthSales.reduce((sum, s) => sum + num(s.total), 0);
+
+  let totalProfit = 0;
+  let todayItems = 0;
+  for (const order of closedOrders.data ?? []) {
+    const isToday = new Date(order.created_at) >= today;
+    for (const item of order.order_items ?? []) {
+      const qty = num(item.quantity);
+      const unitPrice = num(item.unit_price);
+      const cost = num(item.products?.cost_price);
+      totalProfit += (unitPrice - cost) * qty;
+      if (isToday) todayItems += qty;
+    }
+  }
+
   return {
-    todaySales: salesRes.data?.reduce((sum, s) => sum + num(s.total), 0) ?? 0,
-    todayOrders: salesRes.data?.length ?? 0,
-    todayItems: 0,
+    todaySales,
+    todayOrders: monthSales.filter((s) => new Date(s.created_at) >= today).length,
+    todayItems,
     lowStockCount: productsRes.data?.filter((p) => p.stock <= p.low_stock_limit).length ?? 0,
-    monthSales: salesRes.data?.reduce((sum, s) => sum + num(s.total), 0) ?? 0,
+    monthSales: monthTotal,
+    totalProfit,
     rooms,
   };
 }
@@ -672,5 +694,8 @@ export async function updateUser(id: string, input: Partial<Pick<UserProfile, 'n
 }
 
 export async function deleteUser(id: string): Promise<void> {
-  await supabase.from('users').delete().eq('id', id);
+  const { error } = await supabase.rpc('admin_delete_user', { p_id: id });
+  if (error) {
+    await supabase.from('users').delete().eq('id', id);
+  }
 }
