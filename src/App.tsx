@@ -229,7 +229,7 @@ const navItems = [
   { href: '/dashboard', label: 'نظرة عامة', icon: Home },
   { href: '/inventory', label: 'المخزون', icon: Boxes, admin: true },
   { href: '/products', label: 'المنتجات', icon: Package, admin: true },
-  { href: '/sales', label: 'المبيعات', icon: ShoppingBasket, admin: true },
+  { href: '/sales', label: 'المبيعات', icon: ShoppingBasket },
   { href: '/reports', label: 'التقارير', icon: FileBarChart, admin: true },
   { href: '/users', label: 'المستخدمون', icon: Users, admin: true },
   { href: '/settings', label: 'الإعدادات', icon: Settings, admin: true },
@@ -2066,7 +2066,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
       </Route>
       <Route path="/sales">
         {() => (
-          <ProtectedRoute adminOnly>
+          <ProtectedRoute>
             <Shell theme={theme} onToggleTheme={onToggleTheme}>
               <SalesPage />
             </Shell>
@@ -2075,7 +2075,7 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
       </Route>
       <Route path="/sales/:saleId">
         {() => (
-          <ProtectedRoute adminOnly>
+          <ProtectedRoute>
             <Shell theme={theme} onToggleTheme={onToggleTheme}>
               <SaleDetailsPage />
             </Shell>
