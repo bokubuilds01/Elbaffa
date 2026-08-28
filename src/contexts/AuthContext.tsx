@@ -28,6 +28,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   const fetchProfile = async (userId: string) => {
+    let profile = await getProfile(userId);
+    if (!profile) {
+      await supabase.rpc('ensure_current_user_profile');
+      profile = await getProfile(userId);
+    }
+    return profile;
+  };
+
+  const getProfile = async (userId: string) => {
     const { data } = await supabase
       .from('users')
       .select('*')
