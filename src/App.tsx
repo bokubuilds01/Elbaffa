@@ -704,6 +704,9 @@ function RoomPage() {
   const barcodeRef = useRef<HTMLInputElement>(null);
   const orderRef = useRef<Order | null>(null);
   const syncTimer = useRef<number | null>(null);
+  const [paidDrafts, setPaidDrafts] = useState<Record<number, number>>({});
+  const [confirmClose, setConfirmClose] = useState(false);
+  const [closing, setClosing] = useState(false);
 
   useEffect(() => { orderRef.current = order; }, [order]);
   useEffect(() => () => { if (syncTimer.current) window.clearTimeout(syncTimer.current); }, []);
@@ -797,6 +800,15 @@ function RoomPage() {
     orderRef.current = updated;
     setOrder(updated);
     setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
+    setPaidDrafts((prev) => {
+      const draft = prev[itemId];
+      if (draft === undefined) return prev;
+      const next = { ...prev };
+      if (newQty <= 0 || draft > newQty) {
+        delete next[itemId];
+      }
+      return next;
+    });
     scheduleSync();
   };
 
@@ -809,22 +821,48 @@ function RoomPage() {
     orderRef.current = updated;
     setOrder(updated);
     setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
+    setPaidDrafts((prev) => {
+      const next = { ...prev };
+      delete next[itemId];
+      return next;
+    });
     scheduleSync();
   };
 
-  const changePaidQty = async (itemId: number, delta: number) => {
+  const changePaidDraft = (itemId: number, delta: number) => {
     const current = orderRef.current;
     if (!current) return;
     const item = current.items.find((i) => i.id === itemId);
     if (!item) return;
-    const nextVal = item.paidQuantity + delta;
+    const currentVal = paidDrafts[itemId] ?? item.paidQuantity;
+    const nextVal = currentVal + delta;
     if (nextVal < 0 || nextVal > item.quantity) return;
+    setPaidDrafts((prev) => {
+      const next = { ...prev };
+      if (nextVal <= 0) delete next[itemId];
+      else next[itemId] = nextVal;
+      return next;
+    });
+  };
+
+  const confirmPaidDraft = async (itemId: number) => {
+    const current = orderRef.current;
+    if (!current) return;
+    const item = current.items.find((i) => i.id === itemId);
+    if (!item) return;
+    const draft = paidDrafts[itemId] ?? item.paidQuantity;
+    if (draft === item.paidQuantity) return;
     try {
-      const fresh = await apiSetOrderItemPaidQty(current.id, itemId, nextVal);
+      const fresh = await apiSetOrderItemPaidQty(current.id, itemId, draft);
       orderRef.current = fresh;
       setOrder(fresh);
+      setPaidDrafts((prev) => {
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
+      });
     } catch (err: any) {
-      alert(err.message || 'حدث خطأ أثناء تحديث حالة الدفع');
+      alert(err.message || 'حدث خطأ أثناء تأكيد الدفع');
     }
   };
 
@@ -863,14 +901,17 @@ function RoomPage() {
     setBarcode('');
   };
 
-  const closeOrder = async () => {
+  const performClose = async () => {
     if (!order) return;
+    setClosing(true);
     try {
       if (syncTimer.current) window.clearTimeout(syncTimer.current);
       await syncNow();
       await apiCloseOrder(orderRef.current?.id ?? order.id);
       setLocation('/sales');
     } catch (err: any) {
+      setClosing(false);
+      setConfirmClose(false);
       alert(err.message || 'حدث خطأ أثناء إغلاق الطلب');
     }
   };
@@ -1030,27 +1071,43 @@ function RoomPage() {
                     </button>
                   </div>
                 </div>
-                <div className="mt-2 flex items-center justify-between rounded-md bg-[#58ae73]/[0.08] px-2 py-1.5">
+                <div className="mt-2 flex items-center justify-between gap-2 rounded-md bg-[#58ae73]/[0.08] px-2 py-1.5">
                   <span className="text-[10px] font-bold text-[#58ae73]">المدفوع</span>
                   <div className="flex items-center gap-2">
                     <button
-                      onClick={() => changePaidQty(item.id, -1)}
-                      disabled={item.paidQuantity <= 0}
+                      onClick={() => changePaidDraft(item.id, -1)}
+                      disabled={(paidDrafts[item.id] ?? item.paidQuantity) <= 0}
                       className="grid h-6 w-6 place-items-center rounded-md bg-white/10 text-white/70 transition hover:bg-[#f03e32] disabled:cursor-not-allowed disabled:opacity-30"
                       data-testid={`button-paid-decrease-${item.id}`}
                     >
                       <Minus size={12} />
                     </button>
                     <span className="w-4 text-center font-mono-app text-[11px]" data-testid={`paid-quantity-${item.id}`}>
-                      {item.paidQuantity}
+                      {paidDrafts[item.id] ?? item.paidQuantity}
                     </span>
                     <button
-                      onClick={() => changePaidQty(item.id, 1)}
-                      disabled={item.paidQuantity >= item.quantity}
+                      onClick={() => changePaidDraft(item.id, 1)}
+                      disabled={(paidDrafts[item.id] ?? item.paidQuantity) >= item.quantity}
                       className="grid h-6 w-6 place-items-center rounded-md bg-white/10 text-white/70 transition hover:bg-[#58ae73] disabled:cursor-not-allowed disabled:opacity-30"
                       data-testid={`button-paid-increase-${item.id}`}
                     >
                       <Plus size={12} />
+                    </button>
+                    <button
+                      onClick={() => confirmPaidDraft(item.id)}
+                      disabled={(paidDrafts[item.id] ?? item.paidQuantity) === item.paidQuantity}
+                      title={(paidDrafts[item.id] ?? item.paidQuantity) === item.paidQuantity ? 'مؤكد' : 'تأكيد الدفع'}
+                      className={cn(
+                        'grid h-6 w-6 place-items-center rounded-md transition',
+                        (paidDrafts[item.id] ?? item.paidQuantity) === item.paidQuantity
+                          ? item.paidQuantity > 0
+                            ? 'bg-[#58ae73]/25 text-[#58ae73]'
+                            : 'bg-white/5 text-white/25'
+                          : 'bg-[#58ae73] text-white hover:bg-[#58ae73]/80',
+                      )}
+                      data-testid={`button-confirm-paid-${item.id}`}
+                    >
+                      <Check size={12} />
                     </button>
                   </div>
                 </div>
@@ -1096,7 +1153,7 @@ function RoomPage() {
               </Button>
             </div>
             <Button
-              onClick={closeOrder}
+              onClick={() => setConfirmClose(true)}
               className="w-full bg-[#f03e32] text-white shadow-[0_4px_0_#8d211c] hover:-translate-y-0.5"
               data-testid="button-close-order"
             >
@@ -1145,6 +1202,51 @@ function RoomPage() {
               {transferRooms.length === 0 && (
                 <p className="py-10 text-center text-xs text-muted-foreground">لا توجد غرف أخرى لنقل الطلب إليها</p>
               )}
+            </div>
+          </Modal>
+        )}
+        {confirmClose && (
+          <Modal title="تأكيد إغلاق الطلب" onClose={() => setConfirmClose(false)}>
+            <div className="space-y-3">
+              <div className="rounded-lg bg-secondary/60 p-4">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-muted-foreground">إجمالي الطلب</span>
+                  <strong className="font-mono-app">{money.format(order.total)}</strong>
+                </div>
+                {(order.paidTotal ?? 0) > 0 && (
+                  <div className="mt-2 flex items-center justify-between text-xs text-[#45825a]">
+                    <span>المدفوع</span>
+                    <strong className="font-mono-app">- {money.format(order.paidTotal)}</strong>
+                  </div>
+                )}
+                <div className="mt-2 flex items-center justify-between border-t border-card-border pt-2 text-xs">
+                  <span className="text-muted-foreground">المتبقي للتحصيل</span>
+                  <strong className="font-mono-app text-sm" data-testid="close-remaining">
+                    {money.format(Math.max(0, order.total - (order.paidTotal ?? 0)))}
+                  </strong>
+                </div>
+              </div>
+              {Object.keys(paidDrafts).length > 0 && (
+                <div className="rounded-lg bg-amber-500/10 p-3 text-[11px] text-amber-600">
+                  يوجد تعديل في المدفوع لم يتم تأكيده بعد. أكّد الدفع قبل الإغلاق أو سيتم تجاهله.
+                </div>
+              )}
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                بعد الإغلاق يتم خصم الأصناف من المخزون وتسجيل الفاتورة، ولن يمكن تعديل الطلب نهائياً.
+              </p>
+              <div className="flex gap-3">
+                <Button variant="soft" className="flex-1" onClick={() => setConfirmClose(false)} disabled={closing}>
+                  العودة
+                </Button>
+                <Button
+                  onClick={performClose}
+                  className="flex-1 bg-[#f03e32] text-white shadow-[0_4px_0_#8d211c] hover:-translate-y-0.5"
+                  disabled={closing}
+                  data-testid="button-confirm-close-order"
+                >
+                  {closing ? 'جارِ الإغلاق...' : 'تأكيد الإغلاق'}
+                </Button>
+              </div>
             </div>
           </Modal>
         )}
