@@ -51,7 +51,7 @@ import {
   listUsers as apiListUsers,
   deleteSale as apiDeleteSale,
   openRoomOrder as apiOpenRoomOrder,
-  setOrderItemPaid as apiSetOrderItemPaid,
+  setOrderItemPaidQty as apiSetOrderItemPaidQty,
   syncOrderItems as apiSyncOrderItems,
   transferOrder as apiTransferOrder,
   createRoom as apiCreateRoom,
@@ -769,7 +769,7 @@ function RoomPage() {
           : i,
       );
     } else {
-      newItems = [...current.items, { id: Date.now(), productId: product.id, name: product.name, quantity: 1, unitPrice: product.sellingPrice, total: product.sellingPrice, paidAt: null }];
+      newItems = [...current.items, { id: Date.now(), productId: product.id, name: product.name, quantity: 1, unitPrice: product.sellingPrice, total: product.sellingPrice, paidAt: null, paidQuantity: 0 }];
     }
     const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
     const updated: Order = { ...current, items: newItems, total: newTotal };
@@ -789,7 +789,7 @@ function RoomPage() {
     const compute = (items: OrderItem[]) =>
       newQty < 1
         ? items.filter((i) => i.id !== itemId)
-        : items.map((i) => (i.id === itemId ? { ...i, quantity: newQty, total: newQty * i.unitPrice } : i));
+        : items.map((i) => (i.id === itemId ? { ...i, quantity: newQty, total: newQty * i.unitPrice, paidQuantity: Math.min(i.paidQuantity, newQty) } : i));
 
     const newItems = compute(current.items);
     const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
@@ -812,13 +812,15 @@ function RoomPage() {
     scheduleSync();
   };
 
-  const togglePaid = async (itemId: number) => {
+  const changePaidQty = async (itemId: number, delta: number) => {
     const current = orderRef.current;
     if (!current) return;
     const item = current.items.find((i) => i.id === itemId);
     if (!item) return;
+    const nextVal = item.paidQuantity + delta;
+    if (nextVal < 0 || nextVal > item.quantity) return;
     try {
-      const fresh = await apiSetOrderItemPaid(current.id, itemId, !item.paidAt);
+      const fresh = await apiSetOrderItemPaidQty(current.id, itemId, nextVal);
       orderRef.current = fresh;
       setOrder(fresh);
     } catch (err: any) {
@@ -987,15 +989,15 @@ function RoomPage() {
             {order.items?.map((item) => (
               <div
                 key={item.id}
-                className={cn('rounded-lg bg-white/[0.055] p-3', item.paidAt && 'border border-[#58ae73]/30')}
+                className={cn('rounded-lg bg-white/[0.055] p-3', item.paidQuantity > 0 && 'border border-[#58ae73]/30')}
                 data-testid={`row-order-item-${item.id}`}
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="flex min-w-0 items-center gap-2">
                     <span className="truncate text-xs font-bold">{item.name}</span>
-                    {item.paidAt && (
+                    {item.paidQuantity > 0 && (
                       <span className="shrink-0 rounded-full bg-[#58ae73]/15 px-2 py-0.5 text-[9px] font-bold text-[#58ae73]" data-testid={`badge-paid-item-${item.id}`}>
-                        مدفوع
+                        {item.paidQuantity >= item.quantity ? 'مدفوع بالكامل' : `مدفوع ${item.paidQuantity}`}
                       </span>
                     )}
                   </span>
@@ -1004,17 +1006,6 @@ function RoomPage() {
                 <div className="mt-3 flex items-center justify-between">
                   <span className="text-[10px] text-white/40">{money.format(item.unitPrice)} / وحدة</span>
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => togglePaid(item.id)}
-                      className={cn(
-                        'grid h-7 w-7 place-items-center rounded-md transition',
-                        item.paidAt ? 'bg-[#58ae73] text-white' : 'bg-white/10 text-white/55 hover:bg-[#58ae73] hover:text-white',
-                      )}
-                      title={item.paidAt ? 'إلغاء تم الدفع' : 'تم الدفع'}
-                      data-testid={`button-toggle-paid-${item.id}`}
-                    >
-                      <CircleCheck size={13} />
-                    </button>
                     <button
                       onClick={() => updateQuantity(item.id, -1)}
                       className="grid h-7 w-7 place-items-center rounded-md bg-white/10 text-white/70 hover:bg-[#f03e32]"
@@ -1036,6 +1027,30 @@ function RoomPage() {
                       data-testid={`button-remove-item-${item.id}`}
                     >
                       <Trash2 size={13} />
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-2 flex items-center justify-between rounded-md bg-[#58ae73]/[0.08] px-2 py-1.5">
+                  <span className="text-[10px] font-bold text-[#58ae73]">المدفوع</span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => changePaidQty(item.id, -1)}
+                      disabled={item.paidQuantity <= 0}
+                      className="grid h-6 w-6 place-items-center rounded-md bg-white/10 text-white/70 transition hover:bg-[#f03e32] disabled:cursor-not-allowed disabled:opacity-30"
+                      data-testid={`button-paid-decrease-${item.id}`}
+                    >
+                      <Minus size={12} />
+                    </button>
+                    <span className="w-4 text-center font-mono-app text-[11px]" data-testid={`paid-quantity-${item.id}`}>
+                      {item.paidQuantity}
+                    </span>
+                    <button
+                      onClick={() => changePaidQty(item.id, 1)}
+                      disabled={item.paidQuantity >= item.quantity}
+                      className="grid h-6 w-6 place-items-center rounded-md bg-white/10 text-white/70 transition hover:bg-[#58ae73] disabled:cursor-not-allowed disabled:opacity-30"
+                      data-testid={`button-paid-increase-${item.id}`}
+                    >
+                      <Plus size={12} />
                     </button>
                   </div>
                 </div>

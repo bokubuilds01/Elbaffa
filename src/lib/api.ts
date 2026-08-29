@@ -31,6 +31,7 @@ export interface OrderItem {
   unitPrice: number;
   total: number;
   paidAt: string | null;
+  paidQuantity: number;
 }
 
 export interface Order {
@@ -117,6 +118,7 @@ function buildOrderItems(rawItems: any[]): OrderItem[] {
     unitPrice: num(item.unit_price),
     total: item.quantity * num(item.unit_price),
     paidAt: item.paid_at ?? null,
+    paidQuantity: item.paid_quantity ?? 0,
   }));
 }
 
@@ -129,7 +131,7 @@ async function readOrder(orderId: number): Promise<Order | null> {
   if (orderErr || !order) return null;
 
   const items = buildOrderItems(order.order_items ?? []);
-  const paidTotal = items.reduce((sum, item) => sum + (item.paidAt ? item.total : 0), 0);
+  const paidTotal = items.reduce((sum, item) => sum + item.paidQuantity * item.unitPrice, 0);
 
   return {
     id: order.id,
@@ -321,10 +323,10 @@ export async function syncOrderItems(orderId: number, items: Array<{ productId: 
   return (await readOrder(orderId))!;
 }
 
-export async function setOrderItemPaid(orderId: number, itemId: number, paid: boolean): Promise<Order> {
+export async function setOrderItemPaidQty(orderId: number, itemId: number, paidQuantity: number): Promise<Order> {
   await supabase
     .from('order_items')
-    .update({ paid_at: paid ? new Date().toISOString() : null })
+    .update({ paid_quantity: paidQuantity, paid_at: paidQuantity > 0 ? new Date().toISOString() : null })
     .eq('id', itemId)
     .eq('order_id', orderId);
   return (await readOrder(orderId))!;
