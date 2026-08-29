@@ -36,7 +36,7 @@ export interface OrderItem {
 
 export interface Order {
   id: number;
-  roomId: number;
+  roomId: number | null;
   roomName: string;
   status: 'open' | 'closed' | 'cancelled';
   total: number;
@@ -54,11 +54,14 @@ export interface Sale {
   date: string;
   time: string;
   total: number;
+  type: 'room' | 'quick';
+  paymentMethod: string | null;
 }
 
 export interface Invoice extends Order {
   invoiceNumber: string;
   employee: string;
+  paymentMethod: string | null;
 }
 
 export interface InventoryRow {
@@ -78,6 +81,8 @@ export interface Dashboard {
   lowStockCount: number;
   monthSales: number;
   totalProfit: number;
+  roomSales: number;
+  quickSales: number;
   rooms: Room[];
 }
 
@@ -136,7 +141,7 @@ async function readOrder(orderId: number): Promise<Order | null> {
   return {
     id: order.id,
     roomId: order.room_id,
-    roomName: order.rooms?.name ?? `غرفة ${order.room_id}`,
+    roomName: order.rooms?.name ?? (order.room_id != null ? `غرفة ${order.room_id}` : 'Quick Sale'),
     status: order.status,
     total: num(order.total),
     paidTotal,
@@ -341,6 +346,36 @@ export async function transferOrder(orderId: number, targetRoomId: number): Prom
   return (await readOrder(orderId))!;
 }
 
+export async function quickSale(
+  items: Array<{ productId: number; quantity: number }>,
+  paymentMethod: 'cash' | 'card' = 'cash',
+): Promise<{ orderId: number; saleId: number; invoiceNumber: string; total: number }> {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { data, error } = await supabase.rpc('create_quick_sale', {
+    p_employee_id: user?.id,
+    p_items: items,
+    p_payment_method: paymentMethod,
+  });
+  if (error) throw new Error(error.message);
+  return data as { orderId: number; saleId: number; invoiceNumber: string; total: number };
+}
+
+export async function getMostUsedProducts(limit = 6): Promise<Product[]> {
+  const { data, error } = await supabase.rpc('top_sold_products', { p_limit: limit });
+  if (error) throw error;
+  return (data ?? []).map((p: any) => ({
+    id: p.id,
+    name: p.name,
+    barcode: p.barcode,
+    sellingPrice: num(p.selling_price),
+    costPrice: num(p.cost_price),
+    stock: p.stock,
+    category: p.category,
+    image: null,
+    lowStockLimit: p.low_stock_limit,
+  }));
+}
+
 export async function closeOrder(orderId: number): Promise<Invoice> {
   const { data: order } = await supabase
     .from('orders')
@@ -383,7 +418,7 @@ export async function closeOrder(orderId: number): Promise<Invoice> {
     .insert({ order_id: orderId, invoice_number: invoiceNumber, room_id: order.room_id, employee_id: user?.id, total: order.total });
 
   const invoice = (await readOrder(orderId))!;
-  return { ...invoice, invoiceNumber, employee: 'Kimo' };
+  return { ...invoice, invoiceNumber, employee: 'Kimo', paymentMethod: null };
 }
 
 // ============================================================
@@ -494,18 +529,21 @@ export async function listInventory(): Promise<InventoryRow[]> {
 export async function listSales(): Promise<Sale[]> {
   const { data } = await supabase
     .from('sales')
-    .select('id, invoice_number, total, created_at, room_id, rooms!sales_room_id_fkey(name), users!sales_employee_id_fkey(name)')
+    .select('id, invoice_number, total, created_at, room_id, payment_method, rooms!sales_room_id_fkey(name), users!sales_employee_id_fkey(name)')
     .order('created_at', { ascending: false });
   return (data ?? []).map((sale) => {
     const d = new Date(sale.created_at);
+    const isQuick = sale.room_id == null;
     return {
       id: sale.id,
       invoiceNumber: sale.invoice_number,
-      room: (sale.rooms as any)?.name ?? 'غرفة',
+      room: isQuick ? 'Quick Sale' : (sale.rooms as any)?.name ?? 'غرفة',
       employee: (sale.users as any)?.name ?? 'موظف',
       date: d.toLocaleDateString('ar-EG'),
       time: d.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
       total: num(sale.total),
+      type: isQuick ? 'quick' : 'room',
+      paymentMethod: sale.payment_method ?? null,
     };
   });
 }
@@ -513,7 +551,7 @@ export async function listSales(): Promise<Sale[]> {
 export async function getSale(saleId: number): Promise<Invoice | null> {
   const { data: sale } = await supabase
     .from('sales')
-    .select('id, invoice_number, order_id')
+    .select('id, invoice_number, order_id, payment_method, users!sales_employee_id_fkey(name)')
     .eq('id', saleId)
     .single();
   if (!sale) return null;
@@ -524,7 +562,8 @@ export async function getSale(saleId: number): Promise<Invoice | null> {
   return {
     ...order,
     invoiceNumber: sale.invoice_number,
-    employee: 'Kimo',
+    employee: (sale.users as any)?.name ?? 'موظف',
+    paymentMethod: sale.payment_method ?? null,
   };
 }
 
@@ -541,7 +580,7 @@ export async function getDashboard(): Promise<Dashboard> {
   const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
 
   const [salesRes, productsRes, rooms, closedOrders] = await Promise.all([
-    supabase.from('sales').select('total, created_at').gte('created_at', monthStart.toISOString()),
+    supabase.from('sales').select('total, created_at, room_id').gte('created_at', monthStart.toISOString()),
     supabase.from('products').select('stock, low_stock_limit'),
     listRooms(),
     supabase.from('orders').select('created_at, order_items(quantity, unit_price, products(cost_price))').eq('status', 'closed'),
@@ -551,6 +590,8 @@ export async function getDashboard(): Promise<Dashboard> {
   const todaySales = monthSales.filter((s) => new Date(s.created_at) >= today)
     .reduce((sum, s) => sum + num(s.total), 0);
   const monthTotal = monthSales.reduce((sum, s) => sum + num(s.total), 0);
+  const roomSales = monthSales.filter((s) => s.room_id != null).reduce((sum, s) => sum + num(s.total), 0);
+  const quickSales = monthSales.filter((s) => s.room_id == null).reduce((sum, s) => sum + num(s.total), 0);
 
   let totalProfit = 0;
   let todayItems = 0;
@@ -572,6 +613,8 @@ export async function getDashboard(): Promise<Dashboard> {
     lowStockCount: productsRes.data?.filter((p) => p.stock <= p.low_stock_limit).length ?? 0,
     monthSales: monthTotal,
     totalProfit,
+    roomSales,
+    quickSales,
     rooms,
   };
 }

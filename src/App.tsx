@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import {
   ArrowLeft,
   ArrowLeftRight,
+  Banknote,
   BarChart3,
   Boxes,
   Check,
@@ -32,6 +33,7 @@ import {
   Upload,
   Users,
   X,
+  Zap,
 } from 'lucide-react';
 import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation, useParams } from 'wouter';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
@@ -44,6 +46,8 @@ import {
   getOrder as apiGetOrder,
   getReports as apiGetReports,
   getSale as apiGetSale,
+  getMostUsedProducts as apiGetMostUsedProducts,
+  quickSale as apiQuickSale,
   listInventory as apiListInventory,
   listProducts as apiListProducts,
   listRooms as apiListRooms,
@@ -230,6 +234,7 @@ function StatCard({ label, value, detail, icon: Icon, accent = false }: { label:
 
 const navItems = [
   { href: '/dashboard', label: 'نظرة عامة', icon: Home },
+  { href: '/quick-sale', label: 'بيع سريع', icon: Zap },
   { href: '/inventory', label: 'المخزون', icon: Boxes, admin: true },
   { href: '/products', label: 'المنتجات', icon: Package, admin: true },
   { href: '/sales', label: 'المبيعات', icon: ShoppingBasket },
@@ -536,6 +541,49 @@ function DashboardPage() {
           detail="إجمالي الأصناف المباعة اليوم"
           icon={Package}
         />
+      </div>
+      <div className="mb-8 grid gap-3 lg:grid-cols-[1fr_1.1fr]">
+        <section className="rounded-xl border border-card-border bg-card p-5 md:p-6">
+          <div className="mb-5 flex items-start justify-between">
+            <div>
+              <h2 className="text-sm font-extrabold">توزيع المبيعات</h2>
+              <p className="mt-1 text-[10px] text-muted-foreground">فصل مبيعات الغرف عن البيع السريع (الشهر الحالي)</p>
+            </div>
+            <Badge tone="neutral">{money.format((data?.roomSales ?? 0) + (data?.quickSales ?? 0))}</Badge>
+          </div>
+          {(() => {
+            const roomSales = data?.roomSales ?? 0;
+            const quickSales = data?.quickSales ?? 0;
+            const grand = roomSales + quickSales;
+            const pct = (v: number) => (grand > 0 ? Math.round((v / grand) * 100) : 0);
+            return (
+              <div className="space-y-4">
+                <div>
+                  <div className="mb-2 flex items-center justify-between text-xs">
+                    <span className="font-bold">مبيعات الغرف</span>
+                    <span className="font-mono-app text-muted-foreground">{money.format(roomSales)}</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-secondary">
+                    <div className="h-full rounded-full bg-primary" style={{ width: `${pct(roomSales)}%` }} data-testid="bar-room-sales" />
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-2 flex items-center justify-between text-xs">
+                    <span className="font-bold">بيع سريع</span>
+                    <span className="font-mono-app text-muted-foreground">{money.format(quickSales)}</span>
+                  </div>
+                  <div className="h-2 overflow-hidden rounded-full bg-secondary">
+                    <div className="h-full rounded-full bg-[#e2b24b]" style={{ width: `${pct(quickSales)}%` }} data-testid="bar-quick-sales" />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between border-t border-border pt-3 text-xs">
+                  <span className="text-muted-foreground">إجمالي المبيعات</span>
+                  <strong className="font-mono-app text-sm" data-testid="total-sales">{money.format(grand)}</strong>
+                </div>
+              </div>
+            );
+          })()}
+        </section>
       </div>
       <section className="rounded-xl border border-card-border bg-card p-5 md:p-6">
         <div className="mb-5 flex items-center justify-between">
@@ -1584,6 +1632,63 @@ function SalesPage() {
     setSales((prev) => prev.filter((s) => s.id !== id));
   };
 
+  const roomSales = sales.filter((s) => s.type === 'room');
+  const quickSales = sales.filter((s) => s.type === 'quick');
+
+  const invoiceHeader = (
+    <tr>
+      <th className="px-5 py-4">رقم الفاتورة</th>
+      <th className="px-5 py-4">الغرفة</th>
+      <th className="px-5 py-4">الموظف</th>
+      <th className="px-5 py-4">التاريخ</th>
+      <th className="px-5 py-4">الإجمالي</th>
+      <th className="px-5 py-4">التفاصيل</th>
+      {isAdmin && <th className="px-5 py-4">إجراء</th>}
+    </tr>
+  );
+
+  const invoiceRows = (list: Sale[]) => (
+    list.map((sale) => (
+      <tr key={sale.id} className="text-xs hover:bg-secondary/30" data-testid={`row-sale-${sale.id}`}>
+        <td className="px-5 py-4">
+          <Link
+            href={`/sales/${sale.id}`}
+            className="font-mono-app font-bold text-primary hover:underline"
+            data-testid={`link-sale-${sale.id}`}
+          >
+            {sale.invoiceNumber}
+          </Link>
+        </td>
+        <td className="px-5 py-4 font-bold">{sale.room}</td>
+        <td className="px-5 py-4 text-muted-foreground">{sale.employee}</td>
+        <td className="px-5 py-4 text-muted-foreground">
+          {sale.date} <span className="mr-2 font-mono-app text-[10px]">{sale.time}</span>
+        </td>
+        <td className="px-5 py-4 font-mono-app font-bold">{money.format(sale.total)}</td>
+        <td className="px-5 py-4">
+          <Link
+            href={`/sales/${sale.id}`}
+            className="text-primary hover:underline"
+            data-testid={`link-sale-details-${sale.id}`}
+          >
+            <ChevronLeft size={16} />
+          </Link>
+        </td>
+        {isAdmin && (
+          <td className="px-5 py-4">
+            <button
+              onClick={() => removeSale(sale.id)}
+              className="text-[10px] font-bold text-destructive hover:underline"
+              data-testid={`button-delete-sale-${sale.id}`}
+            >
+              حذف
+            </button>
+          </td>
+        )}
+      </tr>
+    ))
+  );
+
   return (
     <>
       <PageTitle
@@ -1603,69 +1708,106 @@ function SalesPage() {
           <strong className="mt-1 block font-mono-app text-lg">{integer.format(sales.length)}</strong>
         </div>
       </div>
-      <div className="overflow-hidden rounded-xl border border-card-border bg-card">
-        <div className="overflow-x-auto">
-          {loading ? (
-            <div className="space-y-3 p-5">
-              {Array.from({ length: 5 }).map((_, i) => <Skeleton className="h-12" key={i} />)}
-            </div>
-          ) : (
-            <table className="w-full min-w-[760px] text-right">
-              <thead className="bg-secondary/60 text-[10px] text-muted-foreground">
-                <tr>
-                  <th className="px-5 py-4">رقم الفاتورة</th>
-                  <th className="px-5 py-4">الغرفة</th>
-                  <th className="px-5 py-4">الموظف</th>
-                  <th className="px-5 py-4">التاريخ</th>
-                  <th className="px-5 py-4">الإجمالي</th>
-                  {isAdmin && <th className="px-5 py-4">إجراء</th>}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/80">
-                {sales.map((sale) => (
-                  <tr key={sale.id} className="text-xs hover:bg-secondary/30" data-testid={`row-sale-${sale.id}`}>
-                    <td className="px-5 py-4">
-                      <Link
-                        href={`/sales/${sale.id}`}
-                        className="font-mono-app font-bold text-primary hover:underline"
-                        data-testid={`link-sale-${sale.id}`}
-                      >
-                        {sale.invoiceNumber}
-                      </Link>
-                    </td>
-                    <td className="px-5 py-4 font-bold">{sale.room}</td>
-                    <td className="px-5 py-4 text-muted-foreground">{sale.employee}</td>
-                    <td className="px-5 py-4 text-muted-foreground">
-                      {sale.date} <span className="mr-2 font-mono-app text-[10px]">{sale.time}</span>
-                    </td>
-                    <td className="px-5 py-4 font-mono-app font-bold">{money.format(sale.total)}</td>
-                    <td className="px-5 py-4">
-                      <Link
-                        href={`/sales/${sale.id}`}
-                        className="text-primary hover:underline"
-                        data-testid={`link-sale-details-${sale.id}`}
-                      >
-                        <ChevronLeft size={16} />
-                      </Link>
-                    </td>
-                    {isAdmin && (
-                      <td className="px-5 py-4">
-                        <button
-                          onClick={() => removeSale(sale.id)}
-                          className="text-[10px] font-bold text-destructive hover:underline"
-                          data-testid={`button-delete-sale-${sale.id}`}
-                        >
-                          حذف
-                        </button>
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          )}
+      {loading ? (
+        <div className="space-y-3 p-5">
+          {Array.from({ length: 5 }).map((_, i) => <Skeleton className="h-12" key={i} />)}
         </div>
-      </div>
+      ) : (
+        <div className="space-y-6">
+          <section className="overflow-hidden rounded-xl border border-card-border bg-card">
+            <div className="flex items-center justify-between border-b border-border px-5 py-4">
+              <div>
+                <h2 className="text-sm font-extrabold">مبيعات الغرف</h2>
+                <p className="mt-1 text-[10px] text-muted-foreground">الفواتير المرتبطة بالغرف</p>
+              </div>
+              <Badge tone="neutral">{integer.format(roomSales.length)} فاتورة</Badge>
+            </div>
+            <div className="overflow-x-auto">
+              {roomSales.length === 0 ? (
+                <p className="py-10 text-center text-xs text-muted-foreground">لا توجد مبيعات غرف بعد</p>
+              ) : (
+                <table className="w-full min-w-[760px] text-right">
+                  <thead className="bg-secondary/60 text-[10px] text-muted-foreground">{invoiceHeader}</thead>
+                  <tbody className="divide-y divide-border/80">{invoiceRows(roomSales)}</tbody>
+                </table>
+              )}
+            </div>
+          </section>
+
+          <section className="overflow-hidden rounded-xl border border-[#e2b24b]/30 bg-card">
+            <div className="flex items-center justify-between border-b border-[#e2b24b]/20 px-5 py-4">
+              <div>
+                <h2 className="flex items-center gap-2 text-sm font-extrabold">
+                  <Zap size={15} className="text-[#e2b24b]" />
+                  بيع سريع / Quick Sales
+                </h2>
+                <p className="mt-1 text-[10px] text-muted-foreground">مبيعات مباشرة من الكاشير بدون غرفة</p>
+              </div>
+              <Badge tone="warning">{integer.format(quickSales.length)} عملية</Badge>
+            </div>
+            <div className="overflow-x-auto">
+              {quickSales.length === 0 ? (
+                <p className="py-10 text-center text-xs text-muted-foreground">لا توجد عمليات بيع سريع بعد</p>
+              ) : (
+                <table className="w-full min-w-[760px] text-right">
+                  <thead className="bg-[#e2b24b]/[0.06] text-[10px] text-muted-foreground">
+                    <tr>
+                      <th className="px-5 py-4">رقم الفاتورة</th>
+                      <th className="px-5 py-4">الموظف</th>
+                      <th className="px-5 py-4">التاريخ</th>
+                      <th className="px-5 py-4">طريقة الدفع</th>
+                      <th className="px-5 py-4">الإجمالي</th>
+                      <th className="px-5 py-4">التفاصيل</th>
+                      {isAdmin && <th className="px-5 py-4">إجراء</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/80">
+                    {quickSales.map((sale) => (
+                      <tr key={sale.id} className="text-xs hover:bg-[#e2b24b]/[0.04]" data-testid={`row-sale-quick-${sale.id}`}>
+                        <td className="px-5 py-4">
+                          <Link
+                            href={`/sales/${sale.id}`}
+                            className="font-mono-app font-bold text-[#b8860b] hover:underline"
+                            data-testid={`link-sale-quick-${sale.id}`}
+                          >
+                            {sale.invoiceNumber}
+                          </Link>
+                        </td>
+                        <td className="px-5 py-4 text-muted-foreground">{sale.employee}</td>
+                        <td className="px-5 py-4 text-muted-foreground">
+                          {sale.date} <span className="mr-2 font-mono-app text-[10px]">{sale.time}</span>
+                        </td>
+                        <td className="px-5 py-4">
+                          <Badge tone={sale.paymentMethod === 'card' ? 'neutral' : 'success'}>
+                            {sale.paymentMethod === 'card' ? 'كارت' : 'نقدي'}
+                          </Badge>
+                        </td>
+                        <td className="px-5 py-4 font-mono-app font-bold">{money.format(sale.total)}</td>
+                        <td className="px-5 py-4">
+                          <Link href={`/sales/${sale.id}`} className="text-[#b8860b] hover:underline" data-testid={`link-sale-quick-details-${sale.id}`}>
+                            <ChevronLeft size={16} />
+                          </Link>
+                        </td>
+                        {isAdmin && (
+                          <td className="px-5 py-4">
+                            <button
+                              onClick={() => removeSale(sale.id)}
+                              className="text-[10px] font-bold text-destructive hover:underline"
+                              data-testid={`button-delete-sale-quick-${sale.id}`}
+                            >
+                              حذف
+                            </button>
+                          </td>
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </section>
+        </div>
+      )}
     </>
   );
 }
@@ -1738,6 +1880,12 @@ function SaleDetailsPage() {
               <span className="block text-[10px] text-muted-foreground">الموظف</span>
               <strong className="mt-1 block">{sale.employee}</strong>
             </div>
+            {sale.paymentMethod && (
+              <div>
+                <span className="block text-[10px] text-muted-foreground">طريقة الدفع</span>
+                <strong className="mt-1 block">{sale.paymentMethod === 'card' ? 'كارت' : 'نقدي'}</strong>
+              </div>
+            )}
           </div>
           <div className="py-5">
             <div className="mb-3 grid grid-cols-[1fr_auto_auto] gap-4 text-[10px] font-bold text-muted-foreground">
@@ -1759,6 +1907,367 @@ function SaleDetailsPage() {
           </div>
         </section>
       </div>
+    </>
+  );
+}
+
+// ============================================================
+// Quick Sale Page (direct sale, no room)
+// ============================================================
+
+interface QuickCartItem {
+  productId: number;
+  name: string;
+  unitPrice: number;
+  quantity: number;
+  stock: number;
+}
+
+function QuickSalePage() {
+  const [products, setProducts] = useState<Product[]>([]);
+  const [mostUsed, setMostUsed] = useState<Product[]>([]);
+  const [search, setSearch] = useState('');
+  const [barcode, setBarcode] = useState('');
+  const [cart, setCart] = useState<QuickCartItem[]>([]);
+  const [payOpen, setPayOpen] = useState(false);
+  const [method, setMethod] = useState<'cash' | 'card'>('cash');
+  const [paying, setPaying] = useState(false);
+  const [payError, setPayError] = useState('');
+  const [receipt, setReceipt] = useState<{ invoiceNumber: string; total: number; items: QuickCartItem[]; method: 'cash' | 'card' } | null>(null);
+
+  useEffect(() => {
+    apiListProducts().then(setProducts).catch(() => {});
+    apiGetMostUsedProducts(8).then(setMostUsed).catch(async () => {
+      try {
+        const all = await apiListProducts();
+        setMostUsed(all.filter((p) => p.stock > 0).slice(0, 8));
+      } catch { setMostUsed([]); }
+    });
+  }, []);
+
+  const total = cart.reduce((sum, i) => sum + i.quantity * i.unitPrice, 0);
+  const itemCount = cart.reduce((sum, i) => sum + i.quantity, 0);
+
+  const refreshStock = async () => {
+    try {
+      const fresh = await apiListProducts();
+      setProducts(fresh);
+      setMostUsed((prev) => prev.map((p) => fresh.find((f) => f.id === p.id) ?? p));
+    } catch { /* keep current */ }
+  };
+
+  const addProduct = (product: Product) => {
+    if (product.stock <= 0) return;
+    setCart((prev) => {
+      const existing = prev.find((i) => i.productId === product.id);
+      if (existing) {
+        if (existing.quantity >= product.stock) return prev;
+        return prev.map((i) => i.productId === product.id ? { ...i, quantity: i.quantity + 1 } : i);
+      }
+      return [...prev, { productId: product.id, name: product.name, unitPrice: product.sellingPrice, quantity: 1, stock: product.stock }];
+    });
+  };
+
+  const changeQty = (productId: number, delta: number) => {
+    setCart((prev) =>
+      prev.map((i) => {
+        if (i.productId !== productId) return i;
+        const next = i.quantity + delta;
+        if (next < 1 || next > i.stock) return i;
+        return { ...i, quantity: next };
+      }),
+    );
+  };
+
+  const removeItem = (productId: number) => {
+    setCart((prev) => prev.filter((i) => i.productId !== productId));
+  };
+
+  const handleBarcode = (e: React.FormEvent) => {
+    e.preventDefault();
+    const product = products.find((p) => p.barcode === barcode);
+    if (product) addProduct(product);
+    setBarcode('');
+  };
+
+  const visibleProducts = products.filter((p) =>
+    p.name.includes(search) || p.category.includes(search) || p.barcode.includes(search)
+  );
+
+  const openPay = () => {
+    setPayError('');
+    setMethod('cash');
+    setPayOpen(true);
+  };
+
+  const confirmPay = async () => {
+    if (cart.length === 0) return;
+    setPaying(true);
+    setPayError('');
+    const soldItems = cart;
+    const paidWith = method;
+    try {
+      const res = await apiQuickSale(cart.map((i) => ({ productId: i.productId, quantity: i.quantity })), paidWith);
+      setCart([]);
+      setPayOpen(false);
+      setReceipt({ invoiceNumber: res.invoiceNumber, total: res.total, items: soldItems, method: paidWith });
+      await refreshStock();
+    } catch (err: any) {
+      setPayError(err.message || 'حدث خطأ أثناء إتمام الدفع');
+    }
+    setPaying(false);
+  };
+
+  const CartItemRow = ({ item }: { item: QuickCartItem }) => (
+    <div className="rounded-lg bg-white/[0.055] p-3" data-testid={`quick-cart-item-${item.productId}`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="truncate text-xs font-bold">{item.name}</span>
+        <strong className="font-mono-app text-xs">{money.format(item.quantity * item.unitPrice)}</strong>
+      </div>
+      <div className="mt-3 flex items-center justify-between">
+        <span className="text-[10px] text-white/40">{money.format(item.unitPrice)} / وحدة</span>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => changeQty(item.productId, -1)}
+            disabled={item.quantity <= 1}
+            className="grid h-7 w-7 place-items-center rounded-md bg-white/10 text-white/70 hover:bg-[#f03e32] disabled:cursor-not-allowed disabled:opacity-30"
+            data-testid={`quick-decrease-${item.productId}`}
+          >
+            <Minus size={13} />
+          </button>
+          <span className="w-4 text-center font-mono-app text-xs" data-testid={`quick-qty-${item.productId}`}>{item.quantity}</span>
+          <button
+            onClick={() => changeQty(item.productId, 1)}
+            disabled={item.quantity >= item.stock}
+            className="grid h-7 w-7 place-items-center rounded-md bg-white/10 text-white/70 hover:bg-[#58ae73] disabled:cursor-not-allowed disabled:opacity-30"
+            data-testid={`quick-increase-${item.productId}`}
+          >
+            <Plus size={13} />
+          </button>
+          <button
+            onClick={() => removeItem(item.productId)}
+            className="mr-1 text-white/35 hover:text-[#f03e32]"
+            data-testid={`quick-remove-${item.productId}`}
+          >
+            <Trash2 size={13} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
+  return (
+    <>
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+        <div>
+          <p className="text-[10px] font-bold tracking-[0.15em] text-primary">QUICK SALE</p>
+          <h1 className="mt-1 text-2xl font-extrabold">بيع سريع</h1>
+          <p className="mt-1 text-[10px] text-muted-foreground">بيع مباشر من الكاشير بدون ربط بغرفة</p>
+        </div>
+        <form onSubmit={handleBarcode} className="flex h-11 w-full max-w-[320px] items-center gap-2 rounded-lg border border-input bg-card px-3" data-testid="quick-barcode-form">
+          <ScanLine size={16} className="text-primary" />
+          <input
+            value={barcode}
+            onChange={(e) => setBarcode(e.target.value)}
+            placeholder="مسح الباركود وإضافة فوراً..."
+            className="min-w-0 flex-1 bg-transparent text-xs outline-none"
+            data-testid="quick-barcode-input"
+          />
+        </form>
+      </div>
+      <div className="grid items-start gap-5 xl:grid-cols-[1fr_390px]">
+        <section className="min-w-0 rounded-xl border border-card-border bg-card p-5 md:p-6">
+          <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+            <div className="relative flex-1 sm:max-w-[320px]">
+              <Search size={15} className="absolute right-3 top-3 text-muted-foreground" />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                autoFocus
+                className="h-10 w-full rounded-lg border border-input bg-background pr-9 text-xs outline-none focus:border-primary"
+                placeholder="ابحث باسم المنتج أو التصنيف..."
+                data-testid="quick-search"
+              />
+            </div>
+            <span className="text-[10px] text-muted-foreground">{itemCount} صنف في السلة</span>
+          </div>
+
+          {mostUsed.length > 0 && (
+            <div className="mb-6">
+              <h3 className="mb-3 text-xs font-extrabold text-muted-foreground">الأكثر استخداماً</h3>
+              <div className="flex flex-wrap gap-2">
+                {mostUsed.map((product) => (
+                  <button
+                    key={product.id}
+                    onClick={() => addProduct(product)}
+                    disabled={product.stock <= 0}
+                    className={cn(
+                      'flex items-center gap-2 rounded-lg border px-3 py-2 text-[11px] font-bold transition',
+                      product.stock <= 0
+                        ? 'cursor-not-allowed border-destructive/20 bg-destructive/5 text-destructive/60'
+                        : 'border-primary/30 bg-primary/[0.04] text-foreground hover:-translate-y-0.5 hover:border-primary/70',
+                    )}
+                    data-testid={`quick-most-${product.id}`}
+                  >
+                    <Zap size={12} className={product.stock <= 0 ? 'text-destructive/50' : 'text-primary'} />
+                    {product.name}
+                    <span className="font-mono-app text-[10px] text-muted-foreground">
+                      {product.stock <= 0 ? 'OUT OF STOCK' : `${money.format(product.sellingPrice)}`}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="mb-3 flex items-center justify-between">
+            <h3 className="text-xs font-extrabold text-muted-foreground">الكتالوج</h3>
+            <span className="text-[10px] text-muted-foreground">{visibleProducts.length} منتج</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+            {visibleProducts.map((product) => (
+              <button
+                key={product.id}
+                onClick={() => addProduct(product)}
+                disabled={product.stock <= 0}
+                className={cn(
+                  'group rounded-xl border border-card-border bg-background p-3 text-right transition',
+                  product.stock <= 0
+                    ? 'cursor-not-allowed opacity-45'
+                    : 'hover:-translate-y-0.5 hover:border-primary/60 hover:shadow-md',
+                )}
+                data-testid={`quick-product-${product.id}`}
+              >
+                <div className="mb-3 flex h-20 items-center justify-center rounded-lg bg-secondary text-primary">
+                  <Package size={25} strokeWidth={1.4} />
+                </div>
+                <p className="truncate text-[11px] font-bold">{product.name}</p>
+                <p className="mt-1 truncate text-[9px] text-muted-foreground">{product.category}</p>
+                <div className="mt-2 flex items-center justify-between">
+                  <strong className={cn('font-mono-app text-xs', product.stock <= 0 ? 'text-destructive' : 'text-primary')}>
+                    {product.stock <= 0 ? 'OUT OF STOCK' : money.format(product.sellingPrice)}
+                  </strong>
+                  <span className="text-[9px] text-muted-foreground">{product.stock} متاح</span>
+                </div>
+              </button>
+            ))}
+          </div>
+          {visibleProducts.length === 0 && (
+            <p className="py-14 text-center text-xs text-muted-foreground">لا توجد منتجات مطابقة</p>
+          )}
+        </section>
+
+        <section className="sticky top-[88px] rounded-xl border border-[#2a2a2a] bg-[#171717] p-5 text-white shadow-xl dark:bg-[#101010]">
+          <div className="mb-5 flex items-start justify-between border-b border-white/10 pb-4">
+            <div>
+              <p className="text-[10px] font-bold tracking-[0.15em] text-[#f03e32]">QUICK SALE</p>
+              <h2 className="mt-2 text-lg font-extrabold">السلة</h2>
+            </div>
+            <span className="font-mono-app text-[10px] text-white/35">{itemCount} صنف</span>
+          </div>
+          <div className="max-h-[340px] space-y-2 overflow-auto scrollbar-thin">
+            {cart.map((item) => <CartItemRow key={item.productId} item={item} />)}
+          </div>
+          {cart.length === 0 && (
+            <div className="py-14 text-center text-xs text-white/40">السلة فارغة — أضف منتجات من اليسار</div>
+          )}
+          <div className="mt-5 border-t border-white/10 pt-5">
+            <div className="flex items-center justify-between text-xs text-white/50">
+              <span>الإجمالي</span>
+              <strong className="font-mono-app text-lg text-white" data-testid="quick-total">{money.format(total)}</strong>
+            </div>
+            <Button
+              onClick={openPay}
+              disabled={cart.length === 0}
+              className="mt-4 w-full bg-[#f03e32] text-white shadow-[0_4px_0_#8d211c] hover:-translate-y-0.5"
+              data-testid="button-quick-pay"
+            >
+              <Banknote size={15} />
+              إتمام الدفع / PAY
+            </Button>
+          </div>
+        </section>
+      </div>
+
+      {payOpen && (
+        <Modal title="تأكيد إتمام الدفع" onClose={() => setPayOpen(false)}>
+          <div className="space-y-4">
+            <div className="rounded-lg bg-secondary/60 p-4 text-center">
+              <span className="block text-[10px] text-muted-foreground">الإجمالي</span>
+              <strong className="mt-1 block font-mono-app text-2xl" data-testid="quick-pay-total">{money.format(total)}</strong>
+            </div>
+            <div>
+              <span className="mb-2 block text-xs font-bold">طريقة الدفع</span>
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => setMethod('cash')}
+                  className={cn('rounded-lg border px-4 py-3 text-xs font-bold transition', method === 'cash' ? 'border-primary bg-primary/[0.06] text-primary' : 'border-card-border bg-background text-muted-foreground')}
+                  data-testid="quick-method-cash"
+                >
+                  <span className="block">CASH</span>
+                  <span className="mt-1 block text-[10px] font-normal">نقدي</span>
+                </button>
+                <button
+                  onClick={() => setMethod('card')}
+                  className={cn('rounded-lg border px-4 py-3 text-xs font-bold transition', method === 'card' ? 'border-primary bg-primary/[0.06] text-primary' : 'border-card-border bg-background text-muted-foreground')}
+                  data-testid="quick-method-card"
+                >
+                  <span className="block">CARD</span>
+                  <span className="mt-1 block text-[10px] font-normal">كارت</span>
+                </button>
+              </div>
+            </div>
+            {payError && (
+              <div className="rounded-lg bg-destructive/10 p-3 text-xs text-destructive" data-testid="quick-pay-error">
+                {payError}
+              </div>
+            )}
+            <div className="flex gap-3">
+              <Button variant="soft" className="flex-1" onClick={() => setPayOpen(false)} disabled={paying}>
+                العودة
+              </Button>
+              <Button
+                onClick={confirmPay}
+                className="flex-1 bg-[#f03e32] text-white shadow-[0_4px_0_#8d211c] hover:-translate-y-0.5"
+                disabled={paying}
+                data-testid="button-quick-confirm"
+              >
+                {paying ? 'جارِ الإتمام...' : 'تأكيد الدفع'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {receipt && (
+        <Modal title="تم البيع بنجاح" onClose={() => setReceipt(null)}>
+          <div className="space-y-4">
+            <div className="rounded-lg bg-[#58ae73]/10 p-4 text-center">
+              <CircleCheck size={32} className="mx-auto text-[#58ae73]" />
+              <p className="mt-3 font-mono-app text-sm font-bold">{receipt.invoiceNumber}</p>
+              <strong className="mt-1 block font-mono-app text-2xl" data-testid="quick-receipt-total">{money.format(receipt.total)}</strong>
+              <p className="mt-1 text-[10px] text-muted-foreground">{receipt.method === 'card' ? 'الدفع: كارت' : 'الدفع: نقدي'}</p>
+            </div>
+            <div className="rounded-lg border border-card-border bg-background p-4">
+              {receipt.items && receipt.items.length > 0 ? (
+                <div className="space-y-2">
+                  {receipt.items.map((i) => (
+                    <div key={i.productId} className="flex items-center justify-between text-xs">
+                      <span>{i.name} ×{i.quantity}</span>
+                      <span className="font-mono-app">{money.format(i.quantity * i.unitPrice)}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-center text-xs text-muted-foreground">تم تسجيل البيع في سجل المبيعات</p>
+              )}
+            </div>
+            <Button className="w-full bg-[#f03e32] text-white shadow-[0_4px_0_#8d211c] hover:-translate-y-0.5" onClick={() => setReceipt(null)} data-testid="button-quick-done">
+              تم
+            </Button>
+          </div>
+        </Modal>
+      )}
     </>
   );
 }
@@ -2292,6 +2801,15 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
           <ProtectedRoute>
             <Shell theme={theme} onToggleTheme={onToggleTheme}>
               <RoomPage />
+            </Shell>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/quick-sale">
+        {() => (
+          <ProtectedRoute>
+            <Shell theme={theme} onToggleTheme={onToggleTheme}>
+              <QuickSalePage />
             </Shell>
           </ProtectedRoute>
         )}
