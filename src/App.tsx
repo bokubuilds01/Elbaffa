@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowLeft,
+  ArrowLeftRight,
   BarChart3,
   Boxes,
   Check,
@@ -50,7 +51,9 @@ import {
   listUsers as apiListUsers,
   deleteSale as apiDeleteSale,
   openRoomOrder as apiOpenRoomOrder,
+  setOrderItemPaid as apiSetOrderItemPaid,
   syncOrderItems as apiSyncOrderItems,
+  transferOrder as apiTransferOrder,
   createRoom as apiCreateRoom,
   deleteRoom as apiDeleteRoom,
   updateProduct as apiUpdateProduct,
@@ -766,7 +769,7 @@ function RoomPage() {
           : i,
       );
     } else {
-      newItems = [...current.items, { id: Date.now(), productId: product.id, name: product.name, quantity: 1, unitPrice: product.sellingPrice, total: product.sellingPrice }];
+      newItems = [...current.items, { id: Date.now(), productId: product.id, name: product.name, quantity: 1, unitPrice: product.sellingPrice, total: product.sellingPrice, paidAt: null }];
     }
     const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
     const updated: Order = { ...current, items: newItems, total: newTotal };
@@ -807,6 +810,48 @@ function RoomPage() {
     setOrder(updated);
     setRoom((prev) => prev ? { ...prev, total: newTotal } : prev);
     scheduleSync();
+  };
+
+  const togglePaid = async (itemId: number) => {
+    const current = orderRef.current;
+    if (!current) return;
+    const item = current.items.find((i) => i.id === itemId);
+    if (!item) return;
+    try {
+      const fresh = await apiSetOrderItemPaid(current.id, itemId, !item.paidAt);
+      orderRef.current = fresh;
+      setOrder(fresh);
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء تحديث حالة الدفع');
+    }
+  };
+
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferRooms, setTransferRooms] = useState<Room[]>([]);
+  const [transferError, setTransferError] = useState('');
+  const [transferring, setTransferring] = useState(false);
+
+  const openTransfer = async () => {
+    setTransferError('');
+    setTransferOpen(true);
+    try {
+      const rooms = await apiListRooms();
+      setTransferRooms(rooms.filter((r) => r.id !== roomId));
+    } catch { /* keep empty list */ }
+  };
+
+  const transferOrderNow = async (targetRoomId: number) => {
+    if (!order) return;
+    setTransferring(true);
+    setTransferError('');
+    try {
+      await apiTransferOrder(order.id, targetRoomId);
+      setTransferOpen(false);
+      setLocation('/dashboard');
+    } catch (err: any) {
+      setTransferError(err.message || 'حدث خطأ أثناء نقل الطلب');
+    }
+    setTransferring(false);
   };
 
   const handleBarcode = (e: React.FormEvent) => {
@@ -940,14 +985,36 @@ function RoomPage() {
           </div>
           <div className="max-h-[340px] space-y-2 overflow-auto scrollbar-thin">
             {order.items?.map((item) => (
-              <div key={item.id} className="rounded-lg bg-white/[0.055] p-3" data-testid={`row-order-item-${item.id}`}>
+              <div
+                key={item.id}
+                className={cn('rounded-lg bg-white/[0.055] p-3', item.paidAt && 'border border-[#58ae73]/30')}
+                data-testid={`row-order-item-${item.id}`}
+              >
                 <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-bold">{item.name}</span>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-xs font-bold">{item.name}</span>
+                    {item.paidAt && (
+                      <span className="shrink-0 rounded-full bg-[#58ae73]/15 px-2 py-0.5 text-[9px] font-bold text-[#58ae73]" data-testid={`badge-paid-item-${item.id}`}>
+                        مدفوع
+                      </span>
+                    )}
+                  </span>
                   <strong className="font-mono-app text-xs">{money.format(item.total)}</strong>
                 </div>
                 <div className="mt-3 flex items-center justify-between">
                   <span className="text-[10px] text-white/40">{money.format(item.unitPrice)} / وحدة</span>
                   <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => togglePaid(item.id)}
+                      className={cn(
+                        'grid h-7 w-7 place-items-center rounded-md transition',
+                        item.paidAt ? 'bg-[#58ae73] text-white' : 'bg-white/10 text-white/55 hover:bg-[#58ae73] hover:text-white',
+                      )}
+                      title={item.paidAt ? 'إلغاء تم الدفع' : 'تم الدفع'}
+                      data-testid={`button-toggle-paid-${item.id}`}
+                    >
+                      <CircleCheck size={13} />
+                    </button>
                     <button
                       onClick={() => updateQuantity(item.id, -1)}
                       className="grid h-7 w-7 place-items-center rounded-md bg-white/10 text-white/70 hover:bg-[#f03e32]"
@@ -978,12 +1045,26 @@ function RoomPage() {
           {(!order.items || order.items.length === 0) && (
             <div className="py-14 text-center text-xs text-white/40">لم تتم إضافة أصناف بعد</div>
           )}
-          <div className="mt-5 border-t border-white/10 pt-5">
-            <div className="flex items-center justify-between text-xs text-white/50">
-              <span>الإجمالي</span>
-              <strong className="font-mono-app text-lg text-white">{money.format(order.total)}</strong>
+          <div className="mt-5 space-y-2.5 border-t border-white/10 pt-5">
+            <div className="flex items-center justify-between text-[11px] text-white/50">
+              <span>إجمالي الطلب</span>
+              <strong className="font-mono-app text-sm text-white">{money.format(order.total)}</strong>
             </div>
-            <div className="mt-4 grid grid-cols-2 gap-3">
+            {(order.paidTotal ?? 0) > 0 && (
+              <div className="flex items-center justify-between text-[11px] text-[#58ae73]">
+                <span>المدفوع</span>
+                <strong className="font-mono-app text-sm">
+                  - {money.format(order.paidTotal)}
+                </strong>
+              </div>
+            )}
+            <div className="flex items-center justify-between border-t border-white/10 pt-2.5">
+              <span className="text-xs text-white/50">المتبقي</span>
+              <strong className="font-mono-app text-lg text-white" data-testid="order-remaining">
+                {money.format(order.total - (order.paidTotal ?? 0))}
+              </strong>
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
               <Link
                 href="/dashboard"
                 className="inline-flex min-h-10 items-center justify-center rounded-lg bg-white/10 px-4 text-[11px] font-bold text-white/70 hover:bg-white/15"
@@ -991,15 +1072,67 @@ function RoomPage() {
                 إلغاء
               </Link>
               <Button
-                onClick={closeOrder}
-                className="w-full bg-[#f03e32] text-white shadow-[0_4px_0_#8d211c] hover:-translate-y-0.5"
-                data-testid="button-close-order"
+                onClick={openTransfer}
+                className="bg-white/10 text-white/70 hover:bg-white/15"
+                data-testid="button-transfer-order"
               >
-                إغلاق وتسوية
+                نقل الطلب
+                <ArrowLeftRight size={14} />
               </Button>
             </div>
+            <Button
+              onClick={closeOrder}
+              className="w-full bg-[#f03e32] text-white shadow-[0_4px_0_#8d211c] hover:-translate-y-0.5"
+              data-testid="button-close-order"
+            >
+              إغلاق وتسوية
+            </Button>
           </div>
         </section>
+        {transferOpen && (
+          <Modal title={`نقل طلب ${room.name} إلى غرفة أخرى`} onClose={() => setTransferOpen(false)}>
+            <p className="mb-4 text-xs text-muted-foreground">
+              سيتم نقل جميع أصناف الطلب الحالي إلى الغرفة المختارة، وستعود هذه الغرفة متاحة. الغرف التي بها طلب مفتوح غير متاحة.
+            </p>
+            {transferError && (
+              <div className="mb-4 rounded-lg bg-destructive/10 p-3 text-xs text-destructive" data-testid="transfer-error">
+                {transferError}
+              </div>
+            )}
+            <div className="max-h-[300px] space-y-2 overflow-auto scrollbar-thin">
+              {transferRooms.map((r) => {
+                const unavailable = r.status === 'open';
+                return (
+                  <button
+                    key={r.id}
+                    disabled={unavailable || transferring}
+                    onClick={() => transferOrderNow(r.id)}
+                    className={cn(
+                      'flex w-full items-center justify-between rounded-lg border px-4 py-3 text-right transition',
+                      unavailable
+                        ? 'cursor-not-allowed border-card-border bg-muted opacity-40'
+                        : 'border-card-border bg-background hover:border-primary/60',
+                    )}
+                    data-testid={`button-transfer-room-${r.id}`}
+                  >
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-secondary text-xs font-black">
+                        {String(r.id).padStart(2, '0')}
+                      </span>
+                      <span className="truncate text-xs font-bold">{r.name}</span>
+                    </span>
+                    <span className={cn('shrink-0 text-[10px] font-bold', unavailable ? 'text-muted-foreground' : 'text-[#58ae73]')}>
+                      {unavailable ? 'بها طلب مفتوح' : 'متاحة'}
+                    </span>
+                  </button>
+                );
+              })}
+              {transferRooms.length === 0 && (
+                <p className="py-10 text-center text-xs text-muted-foreground">لا توجد غرف أخرى لنقل الطلب إليها</p>
+              )}
+            </div>
+          </Modal>
+        )}
       </div>
     </>
   );

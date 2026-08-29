@@ -30,6 +30,7 @@ export interface OrderItem {
   quantity: number;
   unitPrice: number;
   total: number;
+  paidAt: string | null;
 }
 
 export interface Order {
@@ -38,6 +39,7 @@ export interface Order {
   roomName: string;
   status: 'open' | 'closed' | 'cancelled';
   total: number;
+  paidTotal: number;
   items: OrderItem[];
   createdAt: string;
   closedAt: string | null;
@@ -114,6 +116,7 @@ function buildOrderItems(rawItems: any[]): OrderItem[] {
     quantity: item.quantity,
     unitPrice: num(item.unit_price),
     total: item.quantity * num(item.unit_price),
+    paidAt: item.paid_at ?? null,
   }));
 }
 
@@ -126,6 +129,7 @@ async function readOrder(orderId: number): Promise<Order | null> {
   if (orderErr || !order) return null;
 
   const items = buildOrderItems(order.order_items ?? []);
+  const paidTotal = items.reduce((sum, item) => sum + (item.paidAt ? item.total : 0), 0);
 
   return {
     id: order.id,
@@ -133,6 +137,7 @@ async function readOrder(orderId: number): Promise<Order | null> {
     roomName: order.rooms?.name ?? `غرفة ${order.room_id}`,
     status: order.status,
     total: num(order.total),
+    paidTotal,
     items,
     createdAt: order.created_at,
     closedAt: order.closed_at ?? null,
@@ -313,6 +318,24 @@ export async function syncOrderItems(orderId: number, items: Array<{ productId: 
   );
 
   await recalcOrderTotal(orderId);
+  return (await readOrder(orderId))!;
+}
+
+export async function setOrderItemPaid(orderId: number, itemId: number, paid: boolean): Promise<Order> {
+  await supabase
+    .from('order_items')
+    .update({ paid_at: paid ? new Date().toISOString() : null })
+    .eq('id', itemId)
+    .eq('order_id', orderId);
+  return (await readOrder(orderId))!;
+}
+
+export async function transferOrder(orderId: number, targetRoomId: number): Promise<Order> {
+  const { error } = await supabase.rpc('transfer_order', {
+    p_order_id: orderId,
+    p_target_room_id: targetRoomId,
+  });
+  if (error) throw new Error(error.message);
   return (await readOrder(orderId))!;
 }
 
