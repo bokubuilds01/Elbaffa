@@ -9,7 +9,6 @@ import {
   ChevronLeft,
   CircleAlert,
   CircleCheck,
-  Clock3,
   FileBarChart,
   Home,
   LockKeyhole,
@@ -18,7 +17,6 @@ import {
   Minus,
   Moon,
   Package,
-  PanelRight,
   Plus,
   Printer,
   RefreshCw,
@@ -64,6 +62,7 @@ import {
   type Dashboard,
   type Invoice,
   type Order,
+  type OrderItem,
   type Product,
   type Reports,
   type Room,
@@ -72,8 +71,6 @@ import {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { ErrorBoundary } from '@/components/error-boundary';
-import { Toaster } from '@/components/ui/toaster';
-import { TooltipProvider } from '@/components/ui/tooltip';
 
 const money = new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 });
 const integer = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 0 });
@@ -192,9 +189,20 @@ function PageTitle({ eyebrow, title, detail, action }: { eyebrow: string; title:
 }
 
 function Modal({ title, children, onClose }: { title: string; children: ReactNode; onClose: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#111]/55 p-4 backdrop-blur-sm" role="dialog" aria-modal="true">
-      <div className="max-h-[90dvh] w-full max-w-xl overflow-auto rounded-2xl border border-card-border bg-card p-5 shadow-2xl md:p-7">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[#111]/55 p-4 backdrop-blur-sm"
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+    >
+      <div className="max-h-[90dvh] w-full max-w-xl overflow-auto rounded-2xl border border-card-border bg-card p-5 shadow-2xl md:p-7" onClick={(e) => e.stopPropagation()}>
         <div className="mb-6 flex items-center justify-between">
           <h2 className="text-lg font-extrabold">{title}</h2>
           <button onClick={onClose} className="rounded-lg p-2 text-muted-foreground hover:bg-secondary" data-testid="button-close-modal">
@@ -542,7 +550,7 @@ function DashboardPage() {
           icon={Package}
         />
       </div>
-      <div className="mb-8 grid gap-3 lg:grid-cols-[1fr_1.1fr]">
+      <div className="mb-8 grid gap-3">
         <section className="rounded-xl border border-card-border bg-card p-5 md:p-6">
           <div className="mb-5 flex items-start justify-between">
             <div>
@@ -752,30 +760,39 @@ function RoomPage() {
   const barcodeRef = useRef<HTMLInputElement>(null);
   const orderRef = useRef<Order | null>(null);
   const syncTimer = useRef<number | null>(null);
+  const mountedRef = useRef(true);
   const [paidDrafts, setPaidDrafts] = useState<Record<number, number>>({});
   const [confirmClose, setConfirmClose] = useState(false);
   const [closing, setClosing] = useState(false);
 
   useEffect(() => { orderRef.current = order; }, [order]);
-  useEffect(() => () => { if (syncTimer.current) window.clearTimeout(syncTimer.current); }, []);
+  useEffect(() => () => {
+    mountedRef.current = false;
+    if (syncTimer.current) window.clearTimeout(syncTimer.current);
+  }, []);
 
   const syncNow = async () => {
     const current = orderRef.current;
     if (!current) return;
     const snapshot = current.items.map((i) => ({ productId: i.productId, quantity: i.quantity }));
+    const fresh = await apiSyncOrderItems(current.id, snapshot);
+    if (!mountedRef.current) return;
+    orderRef.current = fresh;
+    setOrder(fresh);
+  };
+
+  const safeSyncNow = async () => {
     try {
-      const fresh = await apiSyncOrderItems(current.id, snapshot);
-      orderRef.current = fresh;
-      setOrder(fresh);
+      await syncNow();
     } catch (err) {
       console.error('Failed to sync order:', err);
-      loadOrder();
+      await loadOrder();
     }
   };
 
   const scheduleSync = () => {
     if (syncTimer.current) window.clearTimeout(syncTimer.current);
-    syncTimer.current = window.setTimeout(syncNow, 600);
+    syncTimer.current = window.setTimeout(safeSyncNow, 600);
   };
 
   const loadOrder = useCallback(async () => {
@@ -1628,8 +1645,12 @@ function SalesPage() {
 
   const removeSale = async (id: number) => {
     if (!confirm('هل أنت متأكد من حذف هذه الفاتورة؟')) return;
-    await apiDeleteSale(id);
-    setSales((prev) => prev.filter((s) => s.id !== id));
+    try {
+      await apiDeleteSale(id);
+      setSales((prev) => prev.filter((s) => s.id !== id));
+    } catch (err: any) {
+      alert(err.message || 'حدث خطأ أثناء حذف الفاتورة');
+    }
   };
 
   const roomSales = sales.filter((s) => s.type === 'room');
@@ -1928,6 +1949,7 @@ function QuickSalePage() {
   const [mostUsed, setMostUsed] = useState<Product[]>([]);
   const [search, setSearch] = useState('');
   const [barcode, setBarcode] = useState('');
+  const [barcodeError, setBarcodeError] = useState('');
   const [cart, setCart] = useState<QuickCartItem[]>([]);
   const [payOpen, setPayOpen] = useState(false);
   const [method, setMethod] = useState<'cash' | 'card'>('cash');
@@ -1985,9 +2007,20 @@ function QuickSalePage() {
 
   const handleBarcode = (e: React.FormEvent) => {
     e.preventDefault();
-    const product = products.find((p) => p.barcode === barcode);
-    if (product) addProduct(product);
-    setBarcode('');
+    const code = barcode.trim();
+    if (!code) return;
+    const product = products.find((p) => p.barcode === code);
+    if (product) {
+      if (product.stock <= 0) {
+        setBarcodeError('هذا المنتج نفد من المخزون');
+      } else {
+        addProduct(product);
+        setBarcode('');
+        setBarcodeError('');
+      }
+    } else {
+      setBarcodeError('الباركود غير موجود');
+    }
   };
 
   const visibleProducts = products.filter((p) =>
@@ -2064,16 +2097,21 @@ function QuickSalePage() {
           <h1 className="mt-1 text-2xl font-extrabold">بيع سريع</h1>
           <p className="mt-1 text-[10px] text-muted-foreground">بيع مباشر من الكاشير بدون ربط بغرفة</p>
         </div>
-        <form onSubmit={handleBarcode} className="flex h-11 w-full max-w-[320px] items-center gap-2 rounded-lg border border-input bg-card px-3" data-testid="quick-barcode-form">
-          <ScanLine size={16} className="text-primary" />
-          <input
-            value={barcode}
-            onChange={(e) => setBarcode(e.target.value)}
-            placeholder="مسح الباركود وإضافة فوراً..."
-            className="min-w-0 flex-1 bg-transparent text-xs outline-none"
-            data-testid="quick-barcode-input"
-          />
-        </form>
+        <div>
+          <form onSubmit={handleBarcode} className={`flex h-11 w-full max-w-[320px] items-center gap-2 rounded-lg border bg-card px-3 ${barcodeError ? 'border-red-500' : 'border-input'}`} data-testid="quick-barcode-form">
+            <ScanLine size={16} className="text-primary" />
+            <input
+              value={barcode}
+              onChange={(e) => { setBarcode(e.target.value); if (barcodeError) setBarcodeError(''); }}
+              placeholder="مسح الباركود وإضافة فوراً..."
+              className="min-w-0 flex-1 bg-transparent text-xs outline-none"
+              data-testid="quick-barcode-input"
+            />
+          </form>
+          {barcodeError && (
+            <p className="mt-1 max-w-[320px] text-[11px] font-semibold text-red-500" data-testid="quick-barcode-error">{barcodeError}</p>
+          )}
+        </div>
       </div>
       <div className="grid items-start gap-5 xl:grid-cols-[1fr_390px]">
         <section className="min-w-0 rounded-xl border border-card-border bg-card p-5 md:p-6">
@@ -2607,9 +2645,14 @@ function SettingsPage({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: (
 
   useEffect(() => {
     if (!isAdmin) return;
-    supabase.from('site_settings').select('value').eq('key', 'logo_url').single()
-      .then(({ data }) => { if (data?.value) setLogo(data.value); })
-      .catch(() => {});
+    (async () => {
+      try {
+        const { data } = await supabase.from('site_settings').select('value').eq('key', 'logo_url').single();
+        if (data?.value) setLogo(data.value);
+      } catch {
+        /* ignore */
+      }
+    })();
   }, [isAdmin]);
 
   if (!isAdmin) {
@@ -2760,15 +2803,12 @@ function SettingsPage({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: (
 
 function ProtectedRoute({ children, adminOnly = false }: { children: ReactNode; adminOnly?: boolean }) {
   const { user, loading, isAdmin } = useAuth();
-  const [, setLocation] = useLocation();
 
   if (loading) {
     return (
-      <Shell theme="light" onToggleTheme={() => {}}>
-        <div className="grid min-h-[60vh] place-items-center">
-          <Skeleton className="h-8 w-48" />
-        </div>
-      </Shell>
+      <div className="grid min-h-[100dvh] place-items-center">
+        <Skeleton className="h-8 w-48" />
+      </div>
     );
   }
   if (!user) return <Redirect to="/sign-in" />;
@@ -2916,25 +2956,16 @@ function App() {
 
   return (
     <AuthProvider>
-      <QueryClientProvider client={queryClient}>
-        <TooltipProvider>
-          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-            <ErrorBoundary resetKey={window.location.pathname}>
-              <AppRouter
-                theme={theme}
-                onToggleTheme={() => setTheme((c) => c === 'light' ? 'dark' : 'light')}
-              />
-            </ErrorBoundary>
-          </WouterRouter>
-          <Toaster />
-        </TooltipProvider>
-      </QueryClientProvider>
+      <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+        <ErrorBoundary resetKey={window.location.pathname}>
+          <AppRouter
+            theme={theme}
+            onToggleTheme={() => setTheme((c) => c === 'light' ? 'dark' : 'light')}
+          />
+        </ErrorBoundary>
+      </WouterRouter>
     </AuthProvider>
   );
 }
-
-// Need QueryClientProvider for the toast component
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-const queryClient = new QueryClient();
 
 export default App;

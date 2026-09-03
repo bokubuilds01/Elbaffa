@@ -351,9 +351,10 @@ export async function quickSale(
   paymentMethod: 'cash' | 'card' = 'cash',
 ): Promise<{ orderId: number; saleId: number; invoiceNumber: string; total: number }> {
   const { data: { user } } = await supabase.auth.getUser();
+  const payload = items.map((i) => ({ product_id: i.productId, quantity: i.quantity }));
   const { data, error } = await supabase.rpc('create_quick_sale', {
     p_employee_id: user?.id,
-    p_items: items,
+    p_items: payload,
     p_payment_method: paymentMethod,
   });
   if (error) throw new Error(error.message);
@@ -376,49 +377,25 @@ export async function getMostUsedProducts(limit = 6): Promise<Product[]> {
   }));
 }
 
-export async function closeOrder(orderId: number): Promise<Invoice> {
-  const { data: order } = await supabase
-    .from('orders')
-    .select('*, order_items(*, products(name, stock))')
-    .eq('id', orderId)
-    .single();
-  if (!order || order.status !== 'open') throw new Error('الطلب مغلق بالفعل');
-
-  const items = order.order_items ?? [];
-
-  for (const item of items) {
-    const stock = item.products?.stock ?? 0;
-    if (stock < item.quantity) {
-      throw new Error(`${item.products?.name}: الكمية المطلوبة (${item.quantity}) أكبر من المخزون (${stock})`);
-    }
-  }
-
-  await Promise.all([
-    ...items.map((item: any) =>
-      Promise.all([
-        supabase
-          .from('products')
-          .update({ stock: item.products.stock - item.quantity })
-          .eq('id', item.product_id),
-        supabase
-          .from('inventory_transactions')
-          .insert({ product_id: item.product_id, quantity: -item.quantity, type: 'sale', reference_id: orderId }),
-      ])
-    ),
-    supabase
-      .from('orders')
-      .update({ status: 'closed', closed_at: new Date().toISOString() })
-      .eq('id', orderId),
-  ]);
-
+export async function currentUserName(): Promise<string | null> {
   const { data: { user } } = await supabase.auth.getUser();
-  const invoiceNumber = `INV-${String(orderId).padStart(5, '0')}`;
-  await supabase
-    .from('sales')
-    .insert({ order_id: orderId, invoice_number: invoiceNumber, room_id: order.room_id, employee_id: user?.id, total: order.total });
+  if (!user) return null;
+  const { data } = await supabase.from('users').select('name').eq('id', user.id).maybeSingle();
+  return data?.name ?? null;
+}
 
+export async function closeOrder(orderId: number): Promise<Invoice> {
+  const { data, error } = await supabase.rpc('close_room_order', { p_order_id: orderId });
+  if (error) throw new Error(error.message);
+
+  const employee = await currentUserName();
   const invoice = (await readOrder(orderId))!;
-  return { ...invoice, invoiceNumber, employee: 'Kimo', paymentMethod: null };
+  return {
+    ...invoice,
+    invoiceNumber: data?.invoice_number ?? `INV-${String(orderId).padStart(5, '0')}`,
+    employee: employee ?? 'موظف',
+    paymentMethod: null,
+  };
 }
 
 // ============================================================
@@ -568,7 +545,8 @@ export async function getSale(saleId: number): Promise<Invoice | null> {
 }
 
 export async function deleteSale(id: number): Promise<void> {
-  await supabase.from('sales').delete().eq('id', id);
+  const { error } = await supabase.rpc('delete_sale', { p_sale_id: id });
+  if (error) throw new Error(error.message);
 }
 
 // ============================================================
@@ -583,7 +561,7 @@ export async function getDashboard(): Promise<Dashboard> {
     supabase.from('sales').select('total, created_at, room_id').gte('created_at', monthStart.toISOString()),
     supabase.from('products').select('stock, low_stock_limit'),
     listRooms(),
-    supabase.from('orders').select('created_at, order_items(quantity, unit_price, products(cost_price))').eq('status', 'closed'),
+    supabase.from('orders').select('created_at, order_items(quantity, unit_price, products(cost_price))').eq('status', 'closed').gte('closed_at', monthStart.toISOString()),
   ]);
 
   const monthSales = salesRes.data ?? [];
@@ -595,9 +573,9 @@ export async function getDashboard(): Promise<Dashboard> {
 
   let totalProfit = 0;
   let todayItems = 0;
-  for (const order of closedOrders.data ?? []) {
+  for (const order of (closedOrders.data ?? []) as any[]) {
     const isToday = new Date(order.created_at) >= today;
-    for (const item of order.order_items ?? []) {
+    for (const item of (order.order_items ?? []) as any[]) {
       const qty = num(item.quantity);
       const unitPrice = num(item.unit_price);
       const cost = num(item.products?.cost_price);
@@ -653,8 +631,8 @@ export async function getReports(): Promise<Reports> {
 
   const productsMap = new Map<string, { label: string; quantity: number; profit: number }>();
   let totalItems = 0;
-  for (const order of ordersRes.data ?? []) {
-    for (const item of order.order_items ?? []) {
+  for (const order of (ordersRes.data ?? []) as any[]) {
+    for (const item of (order.order_items ?? []) as any[]) {
       const qty = num(item.quantity);
       const unitPrice = num(item.unit_price);
       const cost = num(item.products?.cost_price);
