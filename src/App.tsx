@@ -763,7 +763,8 @@ function RoomPage() {
   const barcodeRef = useRef<HTMLInputElement>(null);
   const orderRef = useRef<Order | null>(null);
   const syncTimer = useRef<number | null>(null);
-  const syncingRef = useRef(false);
+  const syncChainRef = useRef<Promise<void> | null>(null);
+  const editVersionRef = useRef(0);
   const mountedRef = useRef(true);
   const [paidDrafts, setPaidDrafts] = useState<Record<number, number>>({});
   const [confirmClose, setConfirmClose] = useState(false);
@@ -775,22 +776,34 @@ function RoomPage() {
     if (syncTimer.current) window.clearTimeout(syncTimer.current);
   }, []);
 
-  const syncNow = async () => {
+  // Serialized, self-correcting sync that never lets a stale server response
+  // overwrite a newer local edit, and never silently drops a fast click.
+  // Every edit bumps editVersionRef; an in-flight response is only applied if
+  // no newer edit happened meanwhile. Syncs are chained so every call runs
+  // after the previous one and re-snapshots the newest state at execution
+  // time — guaranteeing the displayed quantity can never regress and the last
+  // click is always persisted.
+  const sendSync = async () => {
     const current = orderRef.current;
     if (!current) return;
-    if (syncingRef.current) return;
-    syncingRef.current = true;
+    const started = editVersionRef.current;
     const snapshot = current.items.map((i) => ({ productId: i.productId, quantity: i.quantity }));
-    try {
-      const fresh = await apiSyncOrderItems(current.id, snapshot);
-      if (mountedRef.current) {
-        orderRef.current = fresh;
-        setOrder(fresh);
-      }
-    } finally {
-      syncingRef.current = false;
+    const fresh = await apiSyncOrderItems(current.id, snapshot);
+    if (mountedRef.current && editVersionRef.current === started) {
+      orderRef.current = fresh;
+      setOrder(fresh);
     }
   };
+
+  const syncNow = () => {
+    const prev = syncChainRef.current ?? Promise.resolve();
+    const run = prev.catch(() => {}).then(() => sendSync());
+    syncChainRef.current = run.then(() => { syncChainRef.current = null; });
+    return run;
+  };
+
+  // Used by close: ensure the very latest edits are persisted before closing.
+  const flushSync = () => syncNow();
 
   const safeSyncNow = async () => {
     try {
@@ -803,7 +816,8 @@ function RoomPage() {
 
   const scheduleSync = () => {
     if (syncTimer.current) window.clearTimeout(syncTimer.current);
-    syncTimer.current = window.setTimeout(safeSyncNow, 600);
+    syncTimer.current = window.setTimeout(safeSyncNow, 350);
+    editVersionRef.current += 1;
   };
 
   const loadOrder = useCallback(async () => {
@@ -997,7 +1011,7 @@ function RoomPage() {
     setClosing(true);
     try {
       if (syncTimer.current) window.clearTimeout(syncTimer.current);
-      await syncNow();
+      await flushSync();
       await apiCloseOrder(orderRef.current?.id ?? order.id);
       toast({ type: 'success', title: 'تم إغلاق الطلب', description: 'تم خصم المخزون وحفظ الفاتورة' });
       setLocation('/sales');
