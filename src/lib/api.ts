@@ -293,6 +293,17 @@ export async function syncOrderItems(orderId: number, items: Array<{ productId: 
 
   const existingByProduct = new Map<number, number>((existing ?? []).map((item: any) => [item.product_id, item.id]));
 
+  // Batch-fetch prices for any brand-new products in a single query.
+  const newProductIds = Array.from(new Set(items.filter((i) => !existingByProduct.has(i.productId) && i.quantity > 0).map((i) => i.productId)));
+  let priceByProduct: Record<number, number> = {};
+  if (newProductIds.length) {
+    const { data: newProducts } = await supabase
+      .from('products')
+      .select('id, selling_price')
+      .in('id', newProductIds);
+    priceByProduct = Object.fromEntries((newProducts ?? []).map((p) => [p.id, Number(p.selling_price)]));
+  }
+
   await Promise.all(
     items.map(async ({ productId, quantity }) => {
       const itemId = existingByProduct.get(productId);
@@ -304,15 +315,11 @@ export async function syncOrderItems(orderId: number, items: Array<{ productId: 
         }
         existingByProduct.delete(productId);
       } else if (quantity > 0) {
-        const { data: product } = await supabase
-          .from('products')
-          .select('name, selling_price')
-          .eq('id', productId)
-          .single();
-        if (product) {
+        const unitPrice = priceByProduct[productId];
+        if (unitPrice !== undefined) {
           await supabase
             .from('order_items')
-            .insert({ order_id: orderId, product_id: productId, quantity, unit_price: product.selling_price });
+            .insert({ order_id: orderId, product_id: productId, quantity, unit_price: unitPrice });
         }
       }
     })

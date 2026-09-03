@@ -71,6 +71,8 @@ import {
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { ErrorBoundary } from '@/components/error-boundary';
+import { ToastProvider, useToast } from '@/components/Toast';
+import { checkLowStock } from '@/lib/lowStockAlert';
 
 const money = new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 });
 const integer = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 0 });
@@ -750,6 +752,7 @@ function AddRoomModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
 function RoomPage() {
   const params = useParams<{ roomId: string }>();
   const [, setLocation] = useLocation();
+  const { toast } = useToast();
   const roomId = Number(params.roomId);
   const [room, setRoom] = useState<Room | null>(null);
   const [order, setOrder] = useState<Order | null>(null);
@@ -760,6 +763,7 @@ function RoomPage() {
   const barcodeRef = useRef<HTMLInputElement>(null);
   const orderRef = useRef<Order | null>(null);
   const syncTimer = useRef<number | null>(null);
+  const syncingRef = useRef(false);
   const mountedRef = useRef(true);
   const [paidDrafts, setPaidDrafts] = useState<Record<number, number>>({});
   const [confirmClose, setConfirmClose] = useState(false);
@@ -774,11 +778,18 @@ function RoomPage() {
   const syncNow = async () => {
     const current = orderRef.current;
     if (!current) return;
+    if (syncingRef.current) return;
+    syncingRef.current = true;
     const snapshot = current.items.map((i) => ({ productId: i.productId, quantity: i.quantity }));
-    const fresh = await apiSyncOrderItems(current.id, snapshot);
-    if (!mountedRef.current) return;
-    orderRef.current = fresh;
-    setOrder(fresh);
+    try {
+      const fresh = await apiSyncOrderItems(current.id, snapshot);
+      if (mountedRef.current) {
+        orderRef.current = fresh;
+        setOrder(fresh);
+      }
+    } finally {
+      syncingRef.current = false;
+    }
   };
 
   const safeSyncNow = async () => {
@@ -818,7 +829,10 @@ function RoomPage() {
   useEffect(() => { loadOrder(); }, [loadOrder]);
 
   useEffect(() => {
-    apiListProducts().then(setProducts).catch(() => {});
+    apiListProducts().then((list) => {
+      setProducts(list);
+      checkLowStock(list, toast);
+    }).catch(() => {});
   }, []);
 
   const visibleProducts = products.filter((p) =>
@@ -828,16 +842,18 @@ function RoomPage() {
   const addProduct = (product: Product) => {
     const current = orderRef.current;
     if (!current) return;
+    if (product.stock <= 0) return;
     const existingItem = current.items.find((i) => i.productId === product.id);
     let newItems: OrderItem[];
     if (existingItem) {
+      if (existingItem.quantity >= product.stock) return;
       newItems = current.items.map((i) =>
         i.id === existingItem.id
           ? { ...i, quantity: i.quantity + 1, total: (i.quantity + 1) * i.unitPrice }
           : i,
       );
     } else {
-      newItems = [...current.items, { id: Date.now(), productId: product.id, name: product.name, quantity: 1, unitPrice: product.sellingPrice, total: product.sellingPrice, paidAt: null, paidQuantity: 0 }];
+      newItems = [...current.items, { id: Date.now() + Math.floor(Math.random() * 100000), productId: product.id, name: product.name, quantity: 1, unitPrice: product.sellingPrice, total: product.sellingPrice, paidAt: null, paidQuantity: 0 }];
     }
     const newTotal = newItems.reduce((sum, i) => sum + i.total, 0);
     const updated: Order = { ...current, items: newItems, total: newTotal };
@@ -852,7 +868,17 @@ function RoomPage() {
     if (!current) return;
     const item = current.items.find((i) => i.id === itemId);
     if (!item) return;
-    const newQty = item.quantity + delta;
+    const productStock = products.find((p) => p.id === item.productId)?.stock ?? Number.MAX_SAFE_INTEGER;
+    let newQty = item.quantity + delta;
+    if (newQty > productStock) newQty = productStock;
+    if (newQty === item.quantity) return;
+    if (newQty < 1) {
+      setPaidDrafts((prev) => {
+        const next = { ...prev };
+        delete next[itemId];
+        return next;
+      });
+    }
 
     const compute = (items: OrderItem[]) =>
       newQty < 1
@@ -973,11 +999,12 @@ function RoomPage() {
       if (syncTimer.current) window.clearTimeout(syncTimer.current);
       await syncNow();
       await apiCloseOrder(orderRef.current?.id ?? order.id);
+      toast({ type: 'success', title: 'تم إغلاق الطلب', description: 'تم خصم المخزون وحفظ الفاتورة' });
       setLocation('/sales');
     } catch (err: any) {
       setClosing(false);
       setConfirmClose(false);
-      alert(err.message || 'حدث خطأ أثناء إغلاق الطلب');
+      toast({ type: 'error', title: 'تعذّر إغلاق الطلب', description: err.message || 'حدث خطأ أثناء إغلاق الطلب' });
     }
   };
 
@@ -1062,25 +1089,31 @@ function RoomPage() {
             />
           </div>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-            {visibleProducts.map((product) => (
-              <button
-                key={product.id}
-                onClick={() => addProduct(product)}
-                disabled={product.stock === 0}
-                className="group rounded-xl border border-card-border bg-background p-3 text-right transition hover:-translate-y-0.5 hover:border-primary/60 hover:shadow-md disabled:opacity-40"
-                data-testid={`button-add-product-${product.id}`}
-              >
-                <div className="mb-3 flex h-20 items-center justify-center rounded-lg bg-secondary text-primary">
-                  <Package size={25} strokeWidth={1.4} />
-                </div>
-                <p className="truncate text-[11px] font-bold">{product.name}</p>
-                <p className="mt-1 truncate text-[9px] text-muted-foreground">{product.category}</p>
-                <div className="mt-2 flex items-center justify-between">
-                  <strong className="font-mono-app text-xs text-primary">{money.format(product.sellingPrice)}</strong>
-                  <span className="text-[9px] text-muted-foreground">{product.stock} متاح</span>
-                </div>
-              </button>
-            ))}
+            {visibleProducts.map((product) => {
+              const inOrderQty = order.items.find((i) => i.productId === product.id)?.quantity ?? 0;
+              const atCap = product.stock === 0 || inOrderQty >= product.stock;
+              return (
+                <button
+                  key={product.id}
+                  onClick={() => addProduct(product)}
+                  disabled={atCap}
+                  className="group rounded-xl border border-card-border bg-background p-3 text-right transition hover:-translate-y-0.5 hover:border-primary/60 hover:shadow-md disabled:opacity-40"
+                  data-testid={`button-add-product-${product.id}`}
+                >
+                  <div className="mb-3 flex h-20 items-center justify-center rounded-lg bg-secondary text-primary">
+                    <Package size={25} strokeWidth={1.4} />
+                  </div>
+                  <p className="truncate text-[11px] font-bold">{product.name}</p>
+                  <p className="mt-1 truncate text-[9px] text-muted-foreground">{product.category}</p>
+                  <div className="mt-2 flex items-center justify-between">
+                    <strong className="font-mono-app text-xs text-primary">{money.format(product.sellingPrice)}</strong>
+                    <span className={cn('text-[9px]', atCap ? 'font-bold text-[#e2b24b]' : 'text-muted-foreground')}>
+                      {product.stock === 0 ? 'نفد' : `${product.stock} متاح`}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
         </section>
         <section className="sticky top-[88px] rounded-xl border border-[#2a2a2a] bg-[#171717] p-5 text-white shadow-xl dark:bg-[#101010]">
@@ -1122,7 +1155,8 @@ function RoomPage() {
                     <span className="w-4 text-center font-mono-app text-xs">{item.quantity}</span>
                     <button
                       onClick={() => updateQuantity(item.id, 1)}
-                      className="grid h-7 w-7 place-items-center rounded-md bg-white/10 text-white/70 hover:bg-[#f03e32]"
+                      disabled={item.quantity >= (products.find((p) => p.id === item.productId)?.stock ?? Number.MAX_SAFE_INTEGER)}
+                      className="grid h-7 w-7 place-items-center rounded-md bg-white/10 text-white/70 hover:bg-[#f03e32] disabled:cursor-not-allowed disabled:opacity-30"
                       data-testid={`button-increase-item-${item.id}`}
                     >
                       <Plus size={13} />
@@ -1945,6 +1979,7 @@ interface QuickCartItem {
 }
 
 function QuickSalePage() {
+  const { toast } = useToast();
   const [products, setProducts] = useState<Product[]>([]);
   const [mostUsed, setMostUsed] = useState<Product[]>([]);
   const [search, setSearch] = useState('');
@@ -1958,7 +1993,7 @@ function QuickSalePage() {
   const [receipt, setReceipt] = useState<{ invoiceNumber: string; total: number; items: QuickCartItem[]; method: 'cash' | 'card' } | null>(null);
 
   useEffect(() => {
-    apiListProducts().then(setProducts).catch(() => {});
+    apiListProducts().then((list) => { setProducts(list); checkLowStock(list, toast); }).catch(() => {});
     apiGetMostUsedProducts(8).then(setMostUsed).catch(async () => {
       try {
         const all = await apiListProducts();
@@ -1974,6 +2009,7 @@ function QuickSalePage() {
     try {
       const fresh = await apiListProducts();
       setProducts(fresh);
+      checkLowStock(fresh, toast);
       setMostUsed((prev) => prev.map((p) => fresh.find((f) => f.id === p.id) ?? p));
     } catch { /* keep current */ }
   };
@@ -2044,6 +2080,7 @@ function QuickSalePage() {
       setCart([]);
       setPayOpen(false);
       setReceipt({ invoiceNumber: res.invoiceNumber, total: res.total, items: soldItems, method: paidWith });
+      toast({ type: 'success', title: 'تمت عملية البيع', description: `فاتورة ${res.invoiceNumber} بمبلغ ${money.format(res.total)}` });
       await refreshStock();
     } catch (err: any) {
       setPayError(err.message || 'حدث خطأ أثناء إتمام الدفع');
@@ -2955,16 +2992,18 @@ function App() {
   }, [theme]);
 
   return (
-    <AuthProvider>
-      <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-        <ErrorBoundary resetKey={window.location.pathname}>
-          <AppRouter
-            theme={theme}
-            onToggleTheme={() => setTheme((c) => c === 'light' ? 'dark' : 'light')}
-          />
-        </ErrorBoundary>
-      </WouterRouter>
-    </AuthProvider>
+    <ToastProvider>
+      <AuthProvider>
+        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+          <ErrorBoundary resetKey={window.location.pathname}>
+            <AppRouter
+              theme={theme}
+              onToggleTheme={() => setTheme((c) => c === 'light' ? 'dark' : 'light')}
+            />
+          </ErrorBoundary>
+        </WouterRouter>
+      </AuthProvider>
+    </ToastProvider>
   );
 }
 
