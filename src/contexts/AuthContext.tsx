@@ -8,6 +8,8 @@ export interface UserProfile {
   email: string;
   role: 'admin' | 'employee';
   active: boolean;
+  shift_type: 'morning' | 'evening' | null;
+  can_handover: boolean;
 }
 
 interface AuthContextType {

@@ -5,11 +5,14 @@ import {
   Banknote,
   BarChart3,
   Boxes,
+  CalendarClock,
   Check,
   ChevronLeft,
   CircleAlert,
   CircleCheck,
+  Clock,
   FileBarChart,
+  History,
   Home,
   LockKeyhole,
   LogOut,
@@ -52,7 +55,13 @@ import {
   listSales as apiListSales,
   listUsers as apiListUsers,
   deleteSale as apiDeleteSale,
+  updateUser as apiUpdateUser,
   openRoomOrder as apiOpenRoomOrder,
+  openShift as apiOpenShift,
+  getCurrentShift as apiGetCurrentShift,
+  handoverShift as apiHandoverShift,
+  listOpenShifts as apiListOpenShifts,
+  listHandovers as apiListHandovers,
   setOrderItemPaidQty as apiSetOrderItemPaidQty,
   syncOrderItems as apiSyncOrderItems,
   transferOrder as apiTransferOrder,
@@ -61,12 +70,14 @@ import {
   updateProduct as apiUpdateProduct,
   type Dashboard,
   type Invoice,
+  type OpenShift,
   type Order,
   type OrderItem,
   type Product,
   type Reports,
   type Room,
   type Sale,
+  type ShiftHandover,
   type UserProfile,
 } from '@/lib/api';
 import { cn } from '@/lib/utils';
@@ -76,6 +87,8 @@ import { checkLowStock } from '@/lib/lowStockAlert';
 
 const money = new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 });
 const integer = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 0 });
+
+const shiftTypeLabel = (t: string | null | undefined) => (t === 'morning' ? 'شيفت صباحي' : t === 'evening' ? 'شيفت مسائي' : 'غير محدد');
 
 // ============================================================
 // Shared UI Components
@@ -245,6 +258,7 @@ function StatCard({ label, value, detail, icon: Icon, accent = false }: { label:
 const navItems = [
   { href: '/dashboard', label: 'نظرة عامة', icon: Home },
   { href: '/quick-sale', label: 'بيع سريع', icon: Zap },
+  { href: '/shift', label: 'الشيفت', icon: Clock },
   { href: '/inventory', label: 'المخزون', icon: Boxes, admin: true },
   { href: '/products', label: 'المنتجات', icon: Package, admin: true },
   { href: '/sales', label: 'المبيعات', icon: ShoppingBasket },
@@ -415,6 +429,11 @@ function Shell({ children, theme, onToggleTheme }: { children: ReactNode; theme:
             <div className="min-w-0 flex-1">
               <p className="truncate text-[11px] font-bold">{profile?.name ?? 'مستخدم'}</p>
               <p className="mt-0.5 text-[9px] text-white/40">{isAdmin ? 'مدير النظام' : 'موظف'}</p>
+              {profile?.shift_type && (
+                <p className="mt-0.5 flex items-center gap-1 text-[9px] text-[#e2b24b]">
+                  <Clock size={9} /> {shiftTypeLabel(profile.shift_type)}
+                </p>
+              )}
             </div>
             <button className="text-white/40 hover:text-white" onClick={signOut} aria-label="تسجيل الخروج" data-testid="button-sign-out">
               <LogOut size={15} />
@@ -2473,6 +2492,385 @@ function ReportList({ title, items, suffix, moneyValue = false }: { title: strin
 }
 
 // ============================================================
+// Shift Page (open shift + handover)
+// ============================================================
+
+function ShiftPage() {
+  const { profile, isAdmin } = useAuth();
+  const { toast } = useToast();
+  const [openShift, setOpenShift] = useState<OpenShift | null>(null);
+  const [handovers, setHandovers] = useState<ShiftHandover[]>([]);
+  const [openShifts, setOpenShifts] = useState<{ id: number; employee: string; shift_type: 'morning' | 'evening'; opening_cash: number; started_at: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [openingCash, setOpeningCash] = useState('0');
+  const [opening, setOpening] = useState(false);
+  const [handoverOpen, setHandoverOpen] = useState(false);
+  const [countedCash, setCountedCash] = useState('');
+  const [notes, setNotes] = useState('');
+  const [handingOver, setHandingOver] = useState(false);
+  const [handoverError, setHandoverError] = useState('');
+  const [lastHandover, setLastHandover] = useState<ShiftHandover | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const s = await apiGetCurrentShift();
+      setOpenShift(s);
+      if (s) setCountedCash(String(s.summary.expected_cash));
+      const hs = await apiListHandovers(isAdmin ? undefined : profile?.id);
+      setHandovers(hs);
+      if (isAdmin) {
+        const os = await apiListOpenShifts();
+        setOpenShifts(os);
+      }
+    } catch {} // fallback
+    setLoading(false);
+  }, [isAdmin, profile?.id]);
+
+  useEffect(() => { load(); }, [load]);
+
+  useEffect(() => {
+    if (!openShift) return;
+    const t = window.setInterval(load, 30000);
+    return () => window.clearInterval(t);
+  }, [openShift, load]);
+
+  const startShift = async () => {
+    setOpening(true);
+    try {
+      const cash = Math.max(0, Number(openingCash) || 0);
+      await apiOpenShift(cash);
+      toast({ type: 'success', title: 'تم فتح الشيفت', description: `الكاش الافتتاحي ${money.format(cash)}` });
+      setOpeningCash('0');
+      await load();
+    } catch (err: any) {
+      toast({ type: 'error', title: 'تعذّر فتح الشيفت', description: err.message || 'حدث خطأ' });
+    }
+    setOpening(false);
+  };
+
+  const confirmHandover = async () => {
+    const counted = Number(countedCash);
+    if (Number.isNaN(counted) || counted < 0) {
+      setHandoverError('أدخل مبلغ الكاش المُعدّ صحيح');
+      return;
+    }
+    setHandingOver(true);
+    setHandoverError('');
+    try {
+      const res = await apiHandoverShift(counted, notes.trim() || undefined);
+      setHandoverOpen(false);
+      setLastHandover(res);
+      setNotes('');
+      toast({ type: 'success', title: 'تم تسليم الشيفت', description: `التقرير محفوظ${res.difference !== 0 ? ` — ${res.difference > 0 ? 'زيادة' : 'عجز'} ${money.format(Math.abs(res.difference))}` : ''}` });
+      await load();
+    } catch (err: any) {
+      setHandoverError(err.message || 'حدث خطأ أثناء التسليم');
+    }
+    setHandingOver(false);
+  };
+
+  if (!profile) return <Skeleton className="h-[400px]" />;
+
+  if (!profile.shift_type && !isAdmin) {
+    return (
+      <EmptyState
+        title="لم يتم تحديد شيفت لحسابك"
+        detail="تواصل مع المدير لتحديد شيفتك (صباحي أو مسائي) وصلاحية تسليم الشيفت."
+      />
+    );
+  }
+
+  const hasPermission = !!profile.can_handover || isAdmin;
+
+  return (
+    <>
+      <PageTitle
+        eyebrow="الوردية / تسليم الشيفت"
+        title="الشيفت"
+        detail={`شيفتك الحالي: ${shiftTypeLabel(profile.shift_type)}`}
+        action={
+          openShift ? (
+            <Button onClick={() => { setHandoverError(''); setHandoverOpen(true); }} data-testid="button-handover-shift">
+              تسليم الشيفت
+              <History size={15} />
+            </Button>
+          ) : undefined
+        }
+      />
+
+      {!hasPermission && (
+        <div className="mb-5 rounded-xl border border-amber-400/30 bg-amber-500/10 p-4 text-xs text-amber-600">
+          <strong>ليس لديك صلاحية فتح وتسليم الشيفت.</strong>
+          <p className="mt-1 text-[11px]">اطلب من المدير تفعيل صلاحية «تسليم الشيفت» لحسابك.</p>
+        </div>
+      )}
+
+      {loading ? (
+        <Skeleton className="h-[260px]" />
+      ) : (
+        <div className="mb-5 grid gap-4 lg:grid-cols-[1fr_320px]">
+          <section className="rounded-xl border border-card-border bg-card p-5 md:p-6">
+            <div className="mb-5 flex items-start justify-between">
+              <div>
+                <h2 className="flex items-center gap-2 text-sm font-extrabold">
+                  <Clock size={16} className="text-primary" />
+                  {openShift ? 'الشيفت الحالي مفتوح' : 'لا يوجد شيفت مفتوح'}
+                </h2>
+                <p className="mt-1 text-[10px] text-muted-foreground">
+                  {openShift
+                    ? `افتُتح ${new Date(openShift.started_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}`
+                    : 'ابدأ ورديتك بفتح الشيفت أولاً'}
+                </p>
+              </div>
+              {openShift && <Badge tone={openShift.shift_type === 'morning' ? 'warning' : 'neutral'}>{shiftTypeLabel(openShift.shift_type)}</Badge>}
+            </div>
+
+            {!hasPermission ? (
+              <p className="py-8 text-center text-xs text-muted-foreground">تحتاج صلاحية تسليم الشيفت لإدارة الوردية.</p>
+            ) : !openShift ? (
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-end">
+                <label className="block flex-1 text-xs font-bold">
+                  الكاش الافتتاحي (اختياري)
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={openingCash}
+                    onChange={(e) => setOpeningCash(e.target.value)}
+                    className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 font-mono-app text-sm outline-none focus:border-primary"
+                    placeholder="0.00"
+                    data-testid="input-opening-cash"
+                  />
+                </label>
+                <Button onClick={startShift} disabled={opening} data-testid="button-open-shift">
+                  <CalendarClock size={15} />
+                  {opening ? 'جارِ الفتح...' : 'بدء الشيفت'}
+                </Button>
+              </div>
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <div className="rounded-lg bg-secondary/50 p-4">
+                  <span className="block text-[10px] text-muted-foreground">عدد الفواتير</span>
+                  <strong className="mt-1 block font-mono-app text-lg">{integer.format(openShift.summary.sales_count)}</strong>
+                </div>
+                <div className="rounded-lg bg-secondary/50 p-4">
+                  <span className="block text-[10px] text-muted-foreground">إجمالي المبيعات</span>
+                  <strong className="mt-1 block font-mono-app text-lg">{money.format(openShift.summary.sales_total)}</strong>
+                </div>
+                <div className="rounded-lg bg-secondary/50 p-4">
+                  <span className="block text-[10px] text-muted-foreground">نقدي (كاش)</span>
+                  <strong className="mt-1 block font-mono-app text-lg">{money.format(openShift.summary.cash_sales)}</strong>
+                </div>
+                <div className="rounded-lg bg-[#e2b24b]/10 p-4">
+                  <span className="block text-[10px] text-muted-foreground">المتوقع بالدرج</span>
+                  <strong className="mt-1 block font-mono-app text-lg text-primary">{money.format(openShift.summary.expected_cash)}</strong>
+                  <span className="mt-1 block text-[9px] text-muted-foreground">افتتاحي {money.format(openShift.opening_cash)} + نقدي</span>
+                </div>
+              </div>
+            )}
+          </section>
+          {openShift && (
+            <section className="rounded-xl border border-[#2a2a2a] bg-[#171717] p-5 text-white dark:bg-[#101010]">
+              <p className="text-[10px] font-bold tracking-[0.15em] text-[#f03e32]">ملخص الشيفت</p>
+              <div className="mt-4 space-y-3 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-white/45">الكاش الافتتاحي</span>
+                  <strong className="font-mono-app">{money.format(openShift.opening_cash)}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-white/45">مبيعات نقدي</span>
+                  <strong className="font-mono-app">{money.format(openShift.summary.cash_sales)}</strong>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-white/45">مبيعات كارت</span>
+                  <strong className="font-mono-app">{money.format(openShift.summary.card_sales)}</strong>
+                </div>
+                <div className="flex justify-between border-t border-white/10 pt-3">
+                  <span className="text-white/60">المتوقع بالدرج</span>
+                  <strong className="font-mono-app text-base">{money.format(openShift.summary.expected_cash)}</strong>
+                </div>
+              </div>
+            </section>
+          )}
+        </div>
+      )}
+
+      {isAdmin && openShifts.length > 0 && (
+        <section className="mb-6 rounded-xl border border-card-border bg-card p-5">
+          <h2 className="text-sm font-extrabold">شيفتات مفتوحة حالياً</h2>
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            {openShifts.map((s) => (
+              <div key={s.id} className="flex items-center justify-between rounded-lg bg-secondary/40 p-4">
+                <div>
+                  <p className="text-xs font-bold">{s.employee}</p>
+                  <p className="mt-1 text-[10px] text-muted-foreground">{shiftTypeLabel(s.shift_type)} • منذ {new Date(s.started_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}</p>
+                </div>
+                <Badge tone="warning">{money.format(s.opening_cash)}</Badge>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="rounded-xl border border-card-border bg-card p-5">
+        <h2 className="text-sm font-extrabold">سجل التسليمات</h2>
+        <p className="mt-1 text-[10px] text-muted-foreground">{isAdmin ? 'كل شيفتات المكان' : 'شيفتاتك السابقة'}</p>
+        <div className="mt-4 overflow-x-auto">
+          {handovers.length === 0 ? (
+            <p className="py-10 text-center text-xs text-muted-foreground">لا توجد تسليمات بعد</p>
+          ) : (
+            <table className="w-full min-w-[760px] text-right">
+              <thead className="bg-secondary/60 text-[10px] text-muted-foreground">
+                <tr>
+                  {isAdmin && <th className="px-4 py-3">الموظف</th>}
+                  <th className="px-4 py-3">الشيفت</th>
+                  <th className="px-4 py-3">الفترة</th>
+                  <th className="px-4 py-3">العدد</th>
+                  <th className="px-4 py-3">المبيعات</th>
+                  <th className="px-4 py-3">المتوقع</th>
+                  <th className="px-4 py-3">المُعدّ</th>
+                  <th className="px-4 py-3">الفرق</th>
+                  <th className="px-4 py-3">ملاحظات</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/80">
+                {handovers.map((h) => {
+                  const diff = h.difference;
+                  return (
+                    <tr key={h.id} className="text-xs" data-testid={`row-handover-${h.id}`}>
+                      {isAdmin && <td className="px-4 py-4 font-bold">{h.employeeName}</td>}
+                      <td className="px-4 py-4">
+                        <Badge tone={h.shift_type === 'morning' ? 'warning' : 'neutral'}>{shiftTypeLabel(h.shift_type)}</Badge>
+                      </td>
+                      <td className="px-4 py-4 text-muted-foreground">
+                        {new Date(h.started_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })} → {new Date(h.ended_at).toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' })}
+                      </td>
+                      <td className="px-4 py-4 font-mono-app">{h.sales_count}</td>
+                      <td className="px-4 py-4 font-mono-app font-bold">{money.format(h.sales_total)}</td>
+                      <td className="px-4 py-4 font-mono-app text-muted-foreground">{money.format(h.expected_cash)}</td>
+                      <td className="px-4 py-4 font-mono-app">{money.format(h.counted_cash)}</td>
+                      <td className="px-4 py-4">
+                        <Badge tone={diff === 0 ? 'success' : diff > 0 ? 'warning' : 'danger'}>
+                          {diff === 0 ? 'مطابق' : `${diff > 0 ? 'زيادة' : 'عجز'} ${money.format(Math.abs(diff))}`}
+                        </Badge>
+                      </td>
+                      <td className="max-w-[160px] truncate px-4 py-4 text-[10px] text-muted-foreground">{h.notes || '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      </section>
+
+      {handoverOpen && openShift && (
+        <Modal title="تسليم الشيفت" onClose={() => setHandoverOpen(false)}>
+          <div className="space-y-4">
+            <div className="space-y-2.5 rounded-lg bg-secondary/60 p-4 text-xs">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">إجمالي المبيعات</span>
+                <strong className="font-mono-app">{money.format(openShift.summary.sales_total)}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">نقدي</span>
+                <strong className="font-mono-app">{money.format(openShift.summary.cash_sales)}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">كارت</span>
+                <strong className="font-mono-app">{money.format(openShift.summary.card_sales)}</strong>
+              </div>
+              <div className="flex justify-between border-t border-card-border pt-2.5">
+                <span className="text-muted-foreground">المتوقع بالدرج</span>
+                <strong className="font-mono-app text-sm" data-testid="handover-expected">{money.format(openShift.summary.expected_cash)}</strong>
+              </div>
+            </div>
+            {handoverError && (
+              <div className="rounded-lg bg-destructive/10 p-3 text-xs text-destructive" data-testid="handover-error">{handoverError}</div>
+            )}
+            <label className="block text-xs font-bold">
+              الكاش المُعدّ فعلياً
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                autoFocus
+                value={countedCash}
+                onChange={(e) => { setCountedCash(e.target.value); }}
+                className="mt-2 h-12 w-full rounded-lg border border-input bg-background px-3 font-mono-app text-lg outline-none focus:border-primary"
+                data-testid="input-counted-cash"
+              />
+            </label>
+            {(() => {
+              const counted = Number(countedCash);
+              const diff = Number.isNaN(counted) ? 0 : counted - openShift.summary.expected_cash;
+              return (
+                <div className={cn('rounded-lg p-3 text-center text-xs font-bold', diff === 0 ? 'bg-[#58ae73]/10 text-[#28603d]' : diff > 0 ? 'bg-amber-500/10 text-amber-600' : 'bg-destructive/10 text-destructive')}>
+                  {Number.isNaN(counted) ? 'أدخل المبلغ' : diff === 0 ? 'مطابق تماماً' : `${diff > 0 ? 'زيادة' : 'عجز'} ${money.format(Math.abs(diff))}`}
+                </div>
+              );
+            })()}
+            <label className="block text-xs font-bold">
+              ملاحظات (اختياري)
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={2}
+                className="mt-2 w-full rounded-lg border border-input bg-background px-3 py-2 text-xs outline-none focus:border-primary"
+                placeholder="أي ملاحظات للتسليم..."
+                data-testid="input-handover-notes"
+              />
+            </label>
+            <div className="flex gap-3">
+              <Button variant="soft" className="flex-1" onClick={() => setHandoverOpen(false)} disabled={handingOver}>
+                العودة
+              </Button>
+              <Button
+                onClick={confirmHandover}
+                className="flex-1 bg-[#f03e32] text-white shadow-[0_4px_0_#8d211c] hover:-translate-y-0.5"
+                disabled={handingOver}
+                data-testid="button-confirm-handover"
+              >
+                {handingOver ? 'جارِ التسليم...' : 'تأكيد التسليم'}
+              </Button>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {lastHandover && (
+        <Modal title="تم تسليم الشيفت" onClose={() => setLastHandover(null)}>
+          <div className="space-y-4">
+            <div className="rounded-lg bg-[#58ae73]/10 p-4 text-center">
+              <CircleCheck size={32} className="mx-auto text-[#58ae73]" />
+              <p className="mt-3 text-xs text-muted-foreground">{shiftTypeLabel(lastHandover.shift_type)} • {integer.format(lastHandover.sales_count)} فاتورة</p>
+              <strong className="mt-1 block font-mono-app text-2xl" data-testid="handover-result-total">{money.format(lastHandover.sales_total)}</strong>
+              <div className={cn('mx-auto mt-3 inline-flex items-center gap-1 rounded-md px-3 py-1 text-[11px] font-bold', lastHandover.difference === 0 ? 'bg-[#58ae73]/15 text-[#28603d]' : lastHandover.difference > 0 ? 'bg-amber-500/15 text-amber-600' : 'bg-destructive/15 text-destructive')}>
+                {lastHandover.difference === 0 ? 'مطابق تماماً' : `${lastHandover.difference > 0 ? 'زيادة' : 'عجز'} ${money.format(Math.abs(lastHandover.difference))}`}
+              </div>
+            </div>
+            <div className="space-y-2 rounded-lg border border-card-border bg-background p-4 text-xs">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">المتوقع بالدرج</span>
+                <strong className="font-mono-app">{money.format(lastHandover.expected_cash)}</strong>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">الكاش المُعدّ</span>
+                <strong className="font-mono-app">{money.format(lastHandover.counted_cash)}</strong>
+              </div>
+            </div>
+            <Button className="w-full bg-[#f03e32] text-white shadow-[0_4px_0_#8d211c] hover:-translate-y-0.5" onClick={() => setLastHandover(null)} data-testid="button-handover-done">
+              تم
+            </Button>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
+// ============================================================
 // Users Page (Admin only)
 // ============================================================
 
@@ -2481,6 +2879,9 @@ function UsersPage() {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<'create' | null>(null);
+  const [editing, setEditing] = useState<UserProfile | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -2506,6 +2907,29 @@ function UsersPage() {
     }
   };
 
+  const saveEdit = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    if (!editing) return;
+    setEditSaving(true);
+    setEditError('');
+    const form = new FormData(e.currentTarget);
+    try {
+      const role = String(form.get('role')) as 'admin' | 'employee';
+      const active = form.get('active') === 'on';
+      await apiUpdateUser(editing.id, {
+        role,
+        active,
+        shift_type: (form.get('shift_type') as 'morning' | 'evening' | '') || null,
+        can_handover: form.get('can_handover') === 'on',
+      });
+      setEditing(null);
+      await load();
+    } catch (err: any) {
+      setEditError(err.message || 'حدث خطأ أثناء الحفظ');
+    }
+    setEditSaving(false);
+  };
+
   if (!isAdmin) {
     return <EmptyState title="غير مصرح" detail="هذه الصفحة متاحة لمديري النظام فقط." />;
   }
@@ -2515,7 +2939,7 @@ function UsersPage() {
       <PageTitle
         eyebrow="الإدارة / الصلاحيات"
         title="المستخدمون"
-        detail="إدارة صلاحيات الفريق."
+        detail="إدارة صلاحيات الفريق وتحديد الشيفتات."
         action={
           <Button onClick={() => setModal('create')} data-testid="button-invite-user">
             <Plus size={16} /> إضافة مستخدم
@@ -2528,7 +2952,7 @@ function UsersPage() {
           <div>
             <strong>صلاحيات الإدارة محمية</strong>
             <p className="mt-1 text-[10px] text-muted-foreground">
-              هذه الصفحة متاحة لمديري النظام فقط. لا يمكن للموظف تعديل المنتجات أو المستخدمين.
+              حدّد شيفت كل حساب (صباحي أو مسائي) وفعّل صلاحية تسليم الشيفت للمسؤولين عن الكاش.
             </p>
           </div>
         </div>
@@ -2540,11 +2964,13 @@ function UsersPage() {
               {Array.from({ length: 3 }).map((_, i) => <Skeleton className="h-12" key={i} />)}
             </div>
           ) : (
-            <table className="w-full min-w-[680px] text-right">
+            <table className="w-full min-w-[820px] text-right">
               <thead className="bg-secondary/60 text-[10px] text-muted-foreground">
                 <tr>
                   <th className="px-5 py-4">المستخدم</th>
                   <th className="px-5 py-4">الدور</th>
+                  <th className="px-5 py-4">الشيفت</th>
+                  <th className="px-5 py-4">تسليم الشيفت</th>
                   <th className="px-5 py-4">الحالة</th>
                   <th className="px-5 py-4">إجراء</th>
                 </tr>
@@ -2569,19 +2995,41 @@ function UsersPage() {
                       </Badge>
                     </td>
                     <td className="px-5 py-4">
+                      {user.shift_type ? (
+                        <Badge tone={user.shift_type === 'morning' ? 'warning' : 'neutral'}>{shiftTypeLabel(user.shift_type)}</Badge>
+                      ) : (
+                        <span className="text-[10px] text-muted-foreground">—</span>
+                      )}
+                    </td>
+                    <td className="px-5 py-4">
+                      <Badge tone={user.can_handover ? 'success' : 'neutral'}>
+                        {user.can_handover ? 'مسموح' : 'ممنوع'}
+                      </Badge>
+                    </td>
+                    <td className="px-5 py-4">
                       <Badge tone={user.active ? 'success' : 'neutral'}>
                         {user.active ? 'نشط' : 'موقوف'}
                       </Badge>
                     </td>
                     <td className="px-5 py-4">
-                      <button
-                        onClick={() => handleDelete(user)}
-                        className="rounded-lg p-2 text-muted-foreground transition hover:bg-red-500/10 hover:text-red-500"
-                        aria-label={`حذف ${user.name}`}
-                        data-testid={`button-delete-user-${user.id}`}
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                      <div className="flex gap-1">
+                        <button
+                          onClick={() => { setEditError(''); setEditing(user); }}
+                          className="rounded-lg p-2 text-muted-foreground transition hover:bg-primary/10 hover:text-primary"
+                          aria-label={`تعديل ${user.name}`}
+                          data-testid={`button-edit-user-${user.id}`}
+                        >
+                          <Settings size={15} />
+                        </button>
+                        <button
+                          onClick={() => handleDelete(user)}
+                          className="rounded-lg p-2 text-muted-foreground transition hover:bg-red-500/10 hover:text-red-500"
+                          aria-label={`حذف ${user.name}`}
+                          data-testid={`button-delete-user-${user.id}`}
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -2595,6 +3043,50 @@ function UsersPage() {
           <CreateUserForm onDone={() => { setModal(null); load(); }} />
         </Modal>
       )}
+      {editing && (
+        <Modal title={`تعديل ${editing.name}`} onClose={() => setEditing(null)}>
+          <form onSubmit={saveEdit} className="space-y-4">
+            {editError && (
+              <div className="rounded-lg bg-destructive/10 p-3 text-xs text-destructive">{editError}</div>
+            )}
+            <label className="block text-xs font-bold">
+              الدور
+              <select
+                name="role"
+                defaultValue={editing.role}
+                className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-xs outline-none focus:border-primary"
+              >
+                <option value="employee">موظف</option>
+                <option value="admin">مدير</option>
+              </select>
+            </label>
+            <label className="block text-xs font-bold">
+              الشيفت
+              <select
+                name="shift_type"
+                defaultValue={editing.shift_type ?? ''}
+                className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-xs outline-none focus:border-primary"
+              >
+                <option value="">غير محدد</option>
+                <option value="morning">شيفت صباحي</option>
+                <option value="evening">شيفت مسائي</option>
+              </select>
+            </label>
+            <label className="flex items-center justify-between rounded-lg border border-card-border bg-background px-4 py-3 text-xs font-bold">
+              صلاحية تسليم الشيفت
+              <input name="can_handover" type="checkbox" defaultChecked={editing.can_handover} className="h-4 w-4 accent-[#f03e32]" />
+            </label>
+            <label className="flex items-center justify-between rounded-lg border border-card-border bg-background px-4 py-3 text-xs font-bold">
+              الحساب نشط
+              <input name="active" type="checkbox" defaultChecked={editing.active} className="h-4 w-4 accent-[#f03e32]" />
+            </label>
+            <Button type="submit" className="w-full" disabled={editSaving}>
+              {editSaving ? 'جارِ الحفظ...' : 'حفظ التعديلات'}
+              <Check size={15} />
+            </Button>
+          </form>
+        </Modal>
+      )}
     </>
   );
 }
@@ -2604,6 +3096,8 @@ function CreateUserForm({ onDone }: { onDone: () => void }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState<'admin' | 'employee'>('employee');
+  const [shiftType, setShiftType] = useState<'morning' | 'evening' | ''>('');
+  const [canHandover, setCanHandover] = useState(false);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -2613,7 +3107,14 @@ function CreateUserForm({ onDone }: { onDone: () => void }) {
     setError('');
     try {
       const { createUser } = await import('@/lib/api');
-      await createUser({ name, email, password, role });
+      await createUser({
+        name,
+        email,
+        password,
+        role,
+        shift_type: shiftType || null,
+        can_handover: canHandover,
+      });
       onDone();
     } catch (err: any) {
       setError(err.message || 'حدث خطأ');
@@ -2676,6 +3177,22 @@ function CreateUserForm({ onDone }: { onDone: () => void }) {
             مدير
           </button>
         </div>
+      </label>
+      <label className="block text-xs font-bold">
+        الشيفت
+        <select
+          className="mt-2 h-11 w-full rounded-lg border border-input bg-background px-3 text-xs outline-none focus:border-primary"
+          value={shiftType}
+          onChange={(e) => setShiftType(e.target.value as 'morning' | 'evening' | '')}
+        >
+          <option value="">غير محدد</option>
+          <option value="morning">شيفت صباحي</option>
+          <option value="evening">شيفت مسائي</option>
+        </select>
+      </label>
+      <label className="flex items-center justify-between rounded-lg border border-card-border bg-background px-4 py-3 text-xs font-bold">
+        صلاحية تسليم الشيفت
+        <input type="checkbox" checked={canHandover} onChange={(e) => setCanHandover(e.target.checked)} className="h-4 w-4 accent-[#f03e32]" />
       </label>
       <Button type="submit" className="w-full" disabled={saving}>
         {saving ? 'جارِ الإنشاء...' : 'إنشاء الحساب'}
@@ -2901,6 +3418,15 @@ function AppRouter({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: () =
           <ProtectedRoute>
             <Shell theme={theme} onToggleTheme={onToggleTheme}>
               <QuickSalePage />
+            </Shell>
+          </ProtectedRoute>
+        )}
+      </Route>
+      <Route path="/shift">
+        {() => (
+          <ProtectedRoute>
+            <Shell theme={theme} onToggleTheme={onToggleTheme}>
+              <ShiftPage />
             </Shell>
           </ProtectedRoute>
         )}

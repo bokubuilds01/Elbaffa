@@ -106,6 +106,54 @@ export interface UserProfile {
   email: string;
   role: 'admin' | 'employee';
   active: boolean;
+  shift_type: 'morning' | 'evening' | null;
+  can_handover: boolean;
+}
+
+export type ShiftType = 'morning' | 'evening';
+
+export interface ShiftSummary {
+  sales_count: number;
+  sales_total: number;
+  cash_sales: number;
+  card_sales: number;
+  expected_cash: number;
+}
+
+export interface ShiftRecord {
+  id: number;
+  shift_type: ShiftType;
+  status: 'open' | 'closed';
+  opening_cash: number;
+  started_at: string;
+  closed_at: string | null;
+}
+
+export interface OpenShift {
+  id: number;
+  shift_type: ShiftType;
+  opening_cash: number;
+  started_at: string;
+  summary: ShiftSummary;
+}
+
+export interface ShiftHandover {
+  id: number;
+  shiftId: number;
+  employeeId: string;
+  employeeName: string;
+  shift_type: ShiftType;
+  started_at: string;
+  ended_at: string;
+  sales_count: number;
+  sales_total: number;
+  cash_sales: number;
+  card_sales: number;
+  opening_cash: number;
+  expected_cash: number;
+  counted_cash: number;
+  difference: number;
+  notes: string | null;
 }
 
 // ============================================================
@@ -699,11 +747,19 @@ export async function getReports(): Promise<Reports> {
 // Users
 // ============================================================
 export async function listUsers(): Promise<UserProfile[]> {
-  const { data } = await supabase.from('users').select('id, name, email, role, active').order('name');
-  return (data ?? []) as UserProfile[];
+  const { data } = await supabase.from('users').select('id, name, email, role, active, shift_type, can_handover').order('name');
+  return (data ?? []).map((u) => ({
+    id: u.id,
+    name: u.name,
+    email: u.email,
+    role: u.role,
+    active: u.active,
+    shift_type: u.shift_type,
+    can_handover: u.can_handover,
+  }));
 }
 
-export async function createUser(input: { name: string; email: string; password: string; role: 'admin' | 'employee' }): Promise<UserProfile> {
+export async function createUser(input: { name: string; email: string; password: string; role: 'admin' | 'employee'; shift_type?: ShiftType | null; can_handover?: boolean }): Promise<UserProfile> {
   const { data: { session: adminSession } } = await supabase.auth.getSession();
 
   const { data: authData, error: authError } = await supabase.auth.signUp({
@@ -729,6 +785,11 @@ export async function createUser(input: { name: string; email: string; password:
   });
   if (error) throw error;
 
+  await supabase.from('users').update({
+    shift_type: input.shift_type ?? null,
+    can_handover: input.can_handover ?? false,
+  }).eq('id', authData.user.id);
+
   if (adminSession) {
     const { data: { user: current } } = await supabase.auth.getUser();
     if (!current || current.id !== adminSession.user.id) {
@@ -742,8 +803,14 @@ export async function createUser(input: { name: string; email: string; password:
   return data as UserProfile;
 }
 
-export async function updateUser(id: string, input: Partial<Pick<UserProfile, 'name' | 'role' | 'active'>>): Promise<void> {
-  await supabase.from('users').update(input).eq('id', id);
+export async function updateUser(id: string, input: Partial<Pick<UserProfile, 'name' | 'role' | 'active' | 'shift_type' | 'can_handover'>>): Promise<void> {
+  const update: any = {};
+  if (input.name !== undefined) update.name = input.name;
+  if (input.role !== undefined) update.role = input.role;
+  if (input.active !== undefined) update.active = input.active;
+  if (input.shift_type !== undefined) update.shift_type = input.shift_type;
+  if (input.can_handover !== undefined) update.can_handover = input.can_handover;
+  await supabase.from('users').update(update).eq('id', id);
 }
 
 export async function deleteUser(id: string): Promise<void> {
@@ -751,4 +818,103 @@ export async function deleteUser(id: string): Promise<void> {
   if (error) {
     await supabase.from('users').delete().eq('id', id);
   }
+}
+
+// ============================================================
+// Shift handover
+// ============================================================
+export async function openShift(openingCash = 0): Promise<void> {
+  const { error } = await supabase.rpc('open_shift', { p_opening_cash: openingCash });
+  if (error) throw new Error(error.message);
+}
+
+export async function getCurrentShift(): Promise<OpenShift | null> {
+  const { data, error } = await supabase.rpc('current_shift_summary');
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  const shift = (data as any).shift;
+  const summary = (data as any).summary;
+  return {
+    id: shift?.id,
+    shift_type: shift?.shift_type,
+    opening_cash: num(shift?.opening_cash),
+    started_at: shift?.started_at,
+    summary: {
+      sales_count: summary?.sales_count ?? 0,
+      sales_total: num(summary?.sales_total),
+      cash_sales: num(summary?.cash_sales),
+      card_sales: num(summary?.card_sales),
+      expected_cash: num(summary?.expected_cash),
+    },
+  };
+}
+
+export async function handoverShift(countedCash: number, notes?: string): Promise<ShiftHandover> {
+  const { data, error } = await supabase.rpc('handover_shift', {
+    p_counted_cash: countedCash,
+    p_notes: notes || null,
+  });
+  if (error) throw new Error(error.message);
+  const raw = data as any;
+  return {
+    id: raw?.id,
+    shiftId: raw?.shift_id,
+    employeeId: '',
+    employeeName: '',
+    shift_type: raw?.shift_type,
+    started_at: raw?.started_at,
+    ended_at: raw?.ended_at,
+    sales_count: raw?.sales_count ?? 0,
+    sales_total: num(raw?.sales_total),
+    cash_sales: num(raw?.cash_sales),
+    card_sales: num(raw?.card_sales),
+    opening_cash: num(raw?.opening_cash),
+    expected_cash: num(raw?.expected_cash),
+    counted_cash: num(raw?.counted_cash),
+    difference: num(raw?.difference),
+    notes: raw?.notes ?? null,
+  };
+}
+
+export async function listOpenShifts(): Promise<Array<{ id: number; employee: string; shift_type: ShiftType; opening_cash: number; started_at: string }>> {
+  const { data } = await supabase
+    .from('shifts')
+    .select('id, employee_id, shift_type, opening_cash, started_at, users!shifts_employee_id_fkey(name)')
+    .eq('status', 'open')
+    .order('started_at');
+  return (data ?? []).map((s) => ({
+    id: s.id,
+    employee: (s.users as any)?.name ?? 'موظف',
+    shift_type: s.shift_type,
+    opening_cash: num(s.opening_cash),
+    started_at: s.started_at,
+  }));
+}
+
+export async function listHandovers(employeeId?: string): Promise<ShiftHandover[]> {
+  let query = supabase
+    .from('shift_handovers')
+    .select('id, shift_id, employee_id, shift_type, started_at, ended_at, sales_count, sales_total, cash_sales, card_sales, opening_cash, expected_cash, counted_cash, difference, notes, users!shift_handovers_employee_id_fkey(name)')
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (employeeId) query = query.eq('employee_id', employeeId);
+  const { data } = await query;
+  return (data ?? []).map((h) => ({
+    id: h.id,
+    shiftId: h.shift_id,
+    employeeId: h.employee_id,
+    employeeName: (h.users as any)?.name ?? 'موظف',
+    shift_type: h.shift_type,
+    started_at: h.started_at,
+    ended_at: h.ended_at,
+    sales_count: h.sales_count,
+    sales_total: num(h.sales_total),
+    cash_sales: num(h.cash_sales),
+    card_sales: num(h.card_sales),
+    opening_cash: num(h.opening_cash),
+    expected_cash: num(h.expected_cash),
+    counted_cash: num(h.counted_cash),
+    difference: num(h.difference),
+    notes: h.notes ?? null,
+  }));
 }
