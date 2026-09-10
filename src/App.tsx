@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ArrowLeft,
   ArrowLeftRight,
@@ -548,16 +548,18 @@ function DashboardPage() {
         <StatCard
           label="مبيعات اليوم"
           value={money.format(data?.todaySales ?? 0)}
-          detail={`الشهر الحالي: ${money.format(data?.monthSales ?? 0)}`}
+          detail={isAdmin ? `الشهر الحالي: ${money.format(data?.monthSales ?? 0)}` : 'مبيعات اليوم فقط'}
           icon={TrendingUp}
           accent
         />
-<StatCard
+        {isAdmin && (
+        <StatCard
             label="أرباح إجمالية"
             value={money.format(data?.totalProfit ?? 0)}
             detail="صافي الربح من الطلبات المغلقة"
             icon={BarChart3}
           />
+        )}
         <StatCard
           label="طلبات مغلقة"
           value={integer.format(data?.todayOrders ?? 0)}
@@ -571,8 +573,9 @@ function DashboardPage() {
           icon={Package}
         />
       </div>
-      <div className="mb-8 grid gap-3">
-        <section className="rounded-xl border border-card-border bg-card p-5 md:p-6">
+      {isAdmin && (
+        <div className="mb-8 grid gap-3">
+          <section className="rounded-xl border border-card-border bg-card p-5 md:p-6">
           <div className="mb-5 flex items-start justify-between">
             <div>
               <h2 className="text-sm font-extrabold">توزيع المبيعات</h2>
@@ -614,6 +617,7 @@ function DashboardPage() {
           })()}
         </section>
       </div>
+        )}
       <section className="rounded-xl border border-card-border bg-card p-5 md:p-6">
         <div className="mb-5 flex items-center justify-between">
           <div>
@@ -1720,8 +1724,19 @@ function SalesPage() {
     }
   };
 
-  const roomSales = sales.filter((s) => s.type === 'room');
-  const quickSales = sales.filter((s) => s.type === 'quick');
+  const visibleSales = useMemo(() => {
+    if (isAdmin) return sales;
+    const now = new Date();
+    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const end = start + 24 * 60 * 60 * 1000;
+    return sales.filter((sale) => {
+      const ts = new Date(sale.createdAt).getTime();
+      return ts >= start && ts < end;
+    });
+  }, [sales, isAdmin]);
+
+  const roomSales = visibleSales.filter((s) => s.type === 'room');
+  const quickSales = visibleSales.filter((s) => s.type === 'quick');
 
   const invoiceHeader = (
     <tr>
@@ -1785,15 +1800,17 @@ function SalesPage() {
         detail="كل الفواتير المغلقة في ورديات المكان."
       />
       <div className="mb-5 flex gap-3">
+        {isAdmin && (
         <div className="rounded-lg border border-card-border bg-card px-4 py-3">
           <span className="block text-[10px] text-muted-foreground">إجمالي الفترة</span>
           <strong className="mt-1 block font-mono-app text-lg">
             {money.format(sales.reduce((sum, sale) => sum + sale.total, 0))}
           </strong>
         </div>
+        )}
         <div className="rounded-lg border border-card-border bg-card px-4 py-3">
           <span className="block text-[10px] text-muted-foreground">عدد الفواتير</span>
-          <strong className="mt-1 block font-mono-app text-lg">{integer.format(sales.length)}</strong>
+          <strong className="mt-1 block font-mono-app text-lg">{integer.format(visibleSales.length)}</strong>
         </div>
       </div>
       {loading ? (

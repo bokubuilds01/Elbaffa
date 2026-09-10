@@ -56,6 +56,7 @@ export interface Sale {
   total: number;
   type: 'room' | 'quick';
   paymentMethod: string | null;
+  createdAt: string;
 }
 
 export interface Invoice extends Order {
@@ -185,13 +186,14 @@ async function readOrder(orderId: number): Promise<Order | null> {
 
   const items = buildOrderItems(order.order_items ?? []);
   const paidTotal = items.reduce((sum, item) => sum + item.paidQuantity * item.unitPrice, 0);
+  const total = items.reduce((sum, item) => sum + item.total, 0);
 
   return {
     id: order.id,
     roomId: order.room_id,
     roomName: order.rooms?.name ?? (order.room_id != null ? `غرفة ${order.room_id}` : 'Quick Sale'),
     status: order.status,
-    total: num(order.total),
+    total,
     paidTotal,
     items,
     createdAt: order.created_at,
@@ -200,6 +202,8 @@ async function readOrder(orderId: number): Promise<Order | null> {
 }
 
 async function recalcOrderTotal(orderId: number): Promise<number> {
+  const { data, error } = await supabase.rpc('recalc_order_total', { p_order_id: orderId });
+  if (data != null && !error) return num(data);
   const { data: items } = await supabase
     .from('order_items')
     .select('quantity, unit_price')
@@ -215,7 +219,7 @@ async function recalcOrderTotal(orderId: number): Promise<number> {
 export async function listRooms(): Promise<Room[]> {
   const [roomsRes, ordersRes] = await Promise.all([
     supabase.from('rooms').select('*').order('id'),
-    supabase.from('orders').select('id, room_id, total').eq('status', 'open'),
+    supabase.from('orders').select('id, room_id, order_items(quantity, unit_price)').eq('status', 'open'),
   ]);
 
   const rooms = roomsRes.data ?? [];
@@ -223,11 +227,15 @@ export async function listRooms(): Promise<Room[]> {
 
   return rooms.map((room) => {
     const order = openOrders.find((o) => o.room_id === room.id);
+    const total = (order?.order_items ?? []).reduce(
+      (sum, item) => sum + item.quantity * num(item.unit_price),
+      0
+    );
     return {
       id: room.id,
       name: room.name,
       status: order ? 'open' : 'available',
-      total: num(order?.total),
+      total,
       orderId: order?.id ?? null,
     };
   });
@@ -576,6 +584,7 @@ export async function listSales(): Promise<Sale[]> {
       total: num(sale.total),
       type: isQuick ? 'quick' : 'room',
       paymentMethod: sale.payment_method ?? null,
+      createdAt: sale.created_at,
     };
   });
 }
