@@ -400,3 +400,86 @@
     inset: -1px;
   }
 }
+
+/* ============================================================
+   PRINT - professional high-contrast receipt
+   Forces black-on-white output regardless of on-screen theme,
+   hides app chrome, and renders only the invoice (print-area).
+   ============================================================ */
+@media print {
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  html,
+  body {
+    background: #ffffff !important;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-area {
+    position: absolute !important;
+    top: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 28px 22px !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+
+  .print-area,
+  .print-area * {
+    visibility: visible !important;
+  }
+
+  .print-area * {
+    color: #000000 !important;
+    background: transparent !important;
+    border-color: #000000 !important;
+    box-shadow: none !important;
+    text-shadow: none !important;
+  }
+
+  .print-area a {
+    text-decoration: none !important;
+  }
+
+  .print-area .font-mono-app {
+    font-family: var(--app-font-mono);
+    font-weight: 700;
+    letter-spacing: 0;
+  }
+
+  .print-area h1,
+  .print-area .text-2xl {
+    font-size: 24px !important;
+    font-weight: 800 !important;
+  }
+
+  .print-area .text-lg {
+    font-size: 20px !important;
+    font-weight: 800 !important;
+  }
+
+  .print-area .text-xs,
+  .print-area .text-\[10px\],
+  .print-area .text-xs strong,
+  .print-area .text-xs span {
+    font-size: 13px !important;
+    font-weight: 700;
+  }
+
+  .print-area .text-\[10px\] strong {
+    font-weight: 700;
+  }
+}

@@ -392,7 +392,7 @@ function Shell({ children, theme, onToggleTheme }: { children: ReactNode; theme:
 
   return (
     <div className="min-h-[100dvh] bg-background text-foreground" dir="rtl">
-      <aside className={cn('fixed inset-y-0 right-0 z-40 flex w-[250px] flex-col border-l border-sidebar-border bg-sidebar px-4 py-5 text-sidebar-foreground transition-transform duration-200 md:translate-x-0', mobileOpen ? 'translate-x-0' : 'translate-x-full')}>
+      <aside className={cn('no-print fixed inset-y-0 right-0 z-40 flex w-[250px] flex-col border-l border-sidebar-border bg-sidebar px-4 py-5 text-sidebar-foreground transition-transform duration-200 md:translate-x-0', mobileOpen ? 'translate-x-0' : 'translate-x-full')}>
         <div className="mb-10 flex items-center justify-between px-2">
           <Logo invert />
           <button onClick={() => setMobileOpen(false)} className="text-white/60 md:hidden" aria-label="إغلاق القائمة" data-testid="button-close-menu">
@@ -442,10 +442,10 @@ function Shell({ children, theme, onToggleTheme }: { children: ReactNode; theme:
         </div>
       </aside>
       {mobileOpen && (
-        <button className="fixed inset-0 z-30 bg-[#111]/40 md:hidden" onClick={() => setMobileOpen(false)} aria-label="إغلاق القائمة" data-testid="button-overlay-menu" />
+        <button className="no-print fixed inset-0 z-30 bg-[#111]/40 md:hidden" onClick={() => setMobileOpen(false)} aria-label="إغلاق القائمة" data-testid="button-overlay-menu" />
       )}
       <main className="min-h-[100dvh] md:mr-[250px]">
-        <header className="sticky top-0 z-20 flex h-[68px] items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur md:px-8">
+        <header className="no-print sticky top-0 z-20 flex h-[68px] items-center justify-between border-b border-border bg-background/95 px-4 backdrop-blur md:px-8">
           <button className="rounded-lg p-2 text-muted-foreground hover:bg-secondary md:hidden" onClick={() => setMobileOpen(true)} aria-label="فتح القائمة" data-testid="button-open-menu">
             <Menu size={21} />
           </button>
@@ -1946,7 +1946,7 @@ function SaleDetailsPage() {
 
   return (
     <>
-      <div className="mb-6 flex items-center gap-3">
+      <div className="no-print mb-6 flex items-center gap-3">
         <Link
           href="/sales"
           className="grid h-9 w-9 place-items-center rounded-lg border border-border bg-card text-muted-foreground"
@@ -1963,7 +1963,7 @@ function SaleDetailsPage() {
         </Button>
       </div>
       <div className="mx-auto grid max-w-4xl gap-5 lg:grid-cols-[1fr_280px]">
-        <section className="rounded-xl border border-card-border bg-card p-6 md:p-9">
+        <section className="print-area rounded-xl border border-card-border bg-card p-6 md:p-9">
           <div className="flex items-start justify-between border-b border-border pb-6">
             <div>
               <Logo />
