@@ -84,9 +84,21 @@ import { cn } from '@/lib/utils';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ToastProvider, useToast } from '@/components/Toast';
 import { checkLowStock } from '@/lib/lowStockAlert';
+const money = new Intl.NumberFormat('ar-EG-u-nu-latn', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 });
 
-const money = new Intl.NumberFormat('ar-EG', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 });
-const integer = new Intl.NumberFormat('ar-EG', { maximumFractionDigits: 0 });
+const integer = new Intl.NumberFormat('ar-EG-u-nu-latn', { maximumFractionDigits: 0 });
+
+function formatInvoiceDate(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return iso;
+  return d.toLocaleString('ar-EG-u-nu-latn', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
 const shiftTypeLabel = (t: string | null | undefined) => (t === 'morning' ? 'شيفت صباحي' : t === 'evening' ? 'شيفت مسائي' : 'غير محدد');
 
@@ -479,8 +491,6 @@ function DashboardPage() {
   const [, setLocation] = useLocation();
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
-  const [confirmRoom, setConfirmRoom] = useState<Room | null>(null);
-  const [opening, setOpening] = useState(false);
   const [showAddRoom, setShowAddRoom] = useState(false);
   const { profile, isAdmin } = useAuth();
 
@@ -499,19 +509,12 @@ function DashboardPage() {
   const openCount = rooms.filter((r) => r.status === 'open').length;
 
   const openRoom = async (room: Room) => {
-    setConfirmRoom(room);
-  };
-
-  const confirmOpen = async () => {
-    if (!confirmRoom) return;
-    setOpening(true);
     try {
-      await apiOpenRoomOrder(confirmRoom.id);
-      setLocation(`/rooms/${confirmRoom.id}`);
+      await apiOpenRoomOrder(room.id);
+      setLocation(`/rooms/${room.id}`);
     } catch (err) {
       console.error('Failed to open room:', err);
     }
-    setOpening(false);
   };
 
   const handleDeleteRoom = async (room: Room) => {
@@ -643,26 +646,6 @@ function DashboardPage() {
           </div>
         )}
       </section>
-      {confirmRoom && (
-        <Modal title={confirmRoom.status === 'open' ? `فتح طلب ${confirmRoom.name}` : `فتح طلب ${confirmRoom.name}`} onClose={() => setConfirmRoom(null)}>
-          <div className="text-center">
-            <p className="text-sm text-muted-foreground mb-6">
-              {confirmRoom.status === 'open'
-                ? `الغرفة بها طلب مفتوح بإجمالي ${money.format(confirmRoom.total)}. هل تريد متابعة الطلب؟`
-                : `هل تريد فتح طلب جديد في ${confirmRoom.name}؟`
-              }
-            </p>
-            <div className="flex gap-3 justify-center">
-              <Button variant="soft" onClick={() => setConfirmRoom(null)} disabled={opening}>
-                العودة
-              </Button>
-              <Button onClick={confirmOpen} disabled={opening}>
-                {opening ? 'جارِ الفتح...' : confirmRoom.status === 'open' ? 'متابعة الطلب' : 'فتح الطلب'}
-              </Button>
-            </div>
-          </div>
-        </Modal>
-      )}
       {showAddRoom && (
         <AddRoomModal onClose={() => setShowAddRoom(false)} onAdded={() => { setShowAddRoom(false); load(); }} />
       )}
@@ -1029,15 +1012,20 @@ function RoomPage() {
     setBarcode('');
   };
 
-  const performClose = async () => {
+  const performClose = async (withPrint: boolean) => {
     if (!order) return;
     setClosing(true);
     try {
       if (syncTimer.current) window.clearTimeout(syncTimer.current);
       await flushSync();
-      await apiCloseOrder(orderRef.current?.id ?? order.id);
+      const invoice = await apiCloseOrder(orderRef.current?.id ?? order.id);
       toast({ type: 'success', title: 'تم إغلاق الطلب', description: 'تم خصم المخزون وحفظ الفاتورة' });
-      setLocation('/sales');
+      if (withPrint && invoice.saleId) {
+        try { sessionStorage.setItem('el-baffa-print-sale', String(invoice.saleId)); } catch { /* ignore */ }
+        setLocation(`/sales/${invoice.saleId}`);
+      } else {
+        setLocation('/sales');
+      }
     } catch (err: any) {
       setClosing(false);
       setConfirmClose(false);
@@ -1375,12 +1363,20 @@ function RoomPage() {
                   العودة
                 </Button>
                 <Button
-                  onClick={performClose}
+                  onClick={() => performClose(true)}
                   className="flex-1 bg-[#f03e32] text-white shadow-[0_4px_0_#8d211c] hover:-translate-y-0.5"
+                  disabled={closing}
+                  data-testid="button-confirm-close-and-print"
+                >
+                  <Printer size={14} /> {closing ? 'جارِ الإغلاق...' : 'تأكيد وطباعة'}
+                </Button>
+                <Button
+                  onClick={() => performClose(false)}
+                  className="flex-1"
                   disabled={closing}
                   data-testid="button-confirm-close-order"
                 >
-                  {closing ? 'جارِ الإغلاق...' : 'تأكيد الإغلاق'}
+                  {closing ? 'جارِ الإغلاق...' : 'تأكيد بدون طباعة'}
                 </Button>
               </div>
             </div>
@@ -1931,6 +1927,17 @@ function SaleDetailsPage() {
     apiGetSale(saleId).then(setSale).finally(() => setLoading(false));
   }, [saleId]);
 
+  useEffect(() => {
+    if (!sale) return;
+    let pending: string | null = null;
+    try { pending = sessionStorage.getItem('el-baffa-print-sale'); } catch { /* ignore */ }
+    if (pending && Number(pending) === saleId) {
+      try { sessionStorage.removeItem('el-baffa-print-sale'); } catch { /* ignore */ }
+      const t = window.setTimeout(() => window.print(), 450);
+      return () => window.clearTimeout(t);
+    }
+  }, [sale, saleId]);
+
   if (loading) return <Skeleton className="h-[400px]" />;
   if (!sale) {
     return (
@@ -1973,7 +1980,7 @@ function SaleDetailsPage() {
               <Badge tone="success">
                 <CircleCheck size={12} /> مكتملة
               </Badge>
-              <p className="mt-3 font-mono-app text-[10px] text-muted-foreground">{sale.createdAt}</p>
+              <p className="mt-3 font-mono-app text-[10px] text-muted-foreground">{formatInvoiceDate(sale.createdAt)}</p>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-5 border-b border-border py-6 text-xs">

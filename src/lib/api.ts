@@ -63,6 +63,7 @@ export interface Invoice extends Order {
   invoiceNumber: string;
   employee: string;
   paymentMethod: string | null;
+  saleId: number;
 }
 
 export interface InventoryRow {
@@ -455,6 +456,7 @@ export async function closeOrder(orderId: number): Promise<Invoice> {
   const invoice = (await readOrder(orderId))!;
   return {
     ...invoice,
+    saleId: num(data?.sale_id),
     invoiceNumber: data?.invoice_number ?? `INV-${String(orderId).padStart(5, '0')}`,
     employee: employee ?? 'موظف',
     paymentMethod: null,
@@ -579,8 +581,8 @@ export async function listSales(): Promise<Sale[]> {
       invoiceNumber: sale.invoice_number,
       room: isQuick ? 'Quick Sale' : (sale.rooms as any)?.name ?? 'غرفة',
       employee: (sale.users as any)?.name ?? 'موظف',
-      date: d.toLocaleDateString('ar-EG'),
-      time: d.toLocaleTimeString('ar-EG', { hour: '2-digit', minute: '2-digit' }),
+      date: d.toLocaleDateString('ar-EG-u-nu-latn'),
+      time: d.toLocaleTimeString('ar-EG-u-nu-latn', { hour: '2-digit', minute: '2-digit' }),
       total: num(sale.total),
       type: isQuick ? 'quick' : 'room',
       paymentMethod: sale.payment_method ?? null,
@@ -602,6 +604,7 @@ export async function getSale(saleId: number): Promise<Invoice | null> {
 
   return {
     ...order,
+    saleId: num(sale.id),
     invoiceNumber: sale.invoice_number,
     employee: (sale.users as any)?.name ?? 'موظف',
     paymentMethod: sale.payment_method ?? null,

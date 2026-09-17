@@ -454,6 +454,10 @@
     text-decoration: none !important;
   }
 
+  .print-area svg {
+    display: none !important;
+  }
+
   .print-area .font-mono-app {
     font-family: var(--app-font-mono);
     font-weight: 700;
