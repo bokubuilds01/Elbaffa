@@ -110,6 +110,7 @@ export interface UserProfile {
   active: boolean;
   shift_type: 'morning' | 'evening' | null;
   can_handover: boolean;
+  hide_profit_cards: boolean;
 }
 
 export type ShiftType = 'morning' | 'evening';
@@ -441,6 +442,12 @@ export async function getMostUsedProducts(limit = 6): Promise<Product[]> {
   }));
 }
 
+export async function setHideProfitCards(hidden: boolean): Promise<boolean> {
+  const { data, error } = await supabase.rpc('set_hide_profit_cards', { p_hidden: hidden });
+  if (error) throw new Error(error.message);
+  return Boolean(data);
+}
+
 export async function currentUserName(): Promise<string | null> {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return null;
@@ -759,7 +766,7 @@ export async function getReports(): Promise<Reports> {
 // Users
 // ============================================================
 export async function listUsers(): Promise<UserProfile[]> {
-  const { data } = await supabase.from('users').select('id, name, email, role, active, shift_type, can_handover').order('name');
+  const { data } = await supabase.from('users').select('id, name, email, role, active, shift_type, can_handover, hide_profit_cards').order('name');
   return (data ?? []).map((u) => ({
     id: u.id,
     name: u.name,
@@ -768,6 +775,7 @@ export async function listUsers(): Promise<UserProfile[]> {
     active: u.active,
     shift_type: u.shift_type,
     can_handover: u.can_handover,
+    hide_profit_cards: u.hide_profit_cards,
   }));
 }
 

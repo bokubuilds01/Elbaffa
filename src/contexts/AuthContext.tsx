@@ -10,6 +10,7 @@ export interface UserProfile {
   active: boolean;
   shift_type: 'morning' | 'evening' | null;
   can_handover: boolean;
+  hide_profit_cards: boolean;
 }
 
 interface AuthContextType {
@@ -20,6 +21,8 @@ interface AuthContextType {
   signUp: (email: string, password: string, name: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
   isAdmin: boolean;
+  hideProfitCards: boolean;
+  setHideProfitCards: (hidden: boolean) => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | null>(null);
@@ -97,6 +100,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(null);
   };
 
+  const toggleProfitCards = async (hidden: boolean) => {
+    const { data, error } = await supabase.rpc('set_hide_profit_cards', { p_hidden: hidden });
+    if (error) throw new Error(error.message);
+    setProfile((prev) => prev ? { ...prev, hide_profit_cards: Boolean(data) } : prev);
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -107,6 +116,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signUp,
         signOut,
         isAdmin: profile?.role === 'admin',
+        hideProfitCards: profile?.hide_profit_cards ?? false,
+        setHideProfitCards: toggleProfitCards,
       }}
     >
       {children}

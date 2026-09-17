@@ -14,6 +14,8 @@ import {
   FileBarChart,
   History,
   Home,
+  Eye,
+  EyeOff,
   LockKeyhole,
   LogOut,
   Menu,
@@ -492,7 +494,16 @@ function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAddRoom, setShowAddRoom] = useState(false);
-  const { profile, isAdmin } = useAuth();
+  const { profile, isAdmin, hideProfitCards, setHideProfitCards } = useAuth();
+  const [profitToggleBusy, setProfitToggleBusy] = useState(false);
+
+  const toggleProfitVisibility = async () => {
+    setProfitToggleBusy(true);
+    try {
+      await setHideProfitCards(!hideProfitCards);
+    } catch { /* keep current */ }
+    setProfitToggleBusy(false);
+  };
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -541,6 +552,16 @@ function DashboardPage() {
                 <Plus size={15} /> إضافة غرفة
               </Button>
             )}
+            <Button
+              onClick={toggleProfitVisibility}
+              variant="soft"
+              disabled={profitToggleBusy}
+              title={hideProfitCards ? 'إظهار الأرقام المالية' : 'إخفاء الأرقام المالية'}
+              data-testid="button-toggle-profit-cards"
+            >
+              {hideProfitCards ? <Eye size={15} /> : <EyeOff size={15} />}
+              {hideProfitCards ? 'إظهار الأرقام' : 'إخفاء الأرقام'}
+            </Button>
             <Button onClick={load} variant="soft" data-testid="button-refresh-dashboard">
               <RefreshCw size={15} /> تحديث البيانات
             </Button>
@@ -548,6 +569,7 @@ function DashboardPage() {
         }
       />
       <div className="mb-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        {!hideProfitCards && (
         <StatCard
           label="مبيعات اليوم"
           value={money.format(data?.todaySales ?? 0)}
@@ -555,7 +577,8 @@ function DashboardPage() {
           icon={TrendingUp}
           accent
         />
-        {isAdmin && (
+        )}
+        {isAdmin && !hideProfitCards && (
         <StatCard
             label="أرباح إجمالية"
             value={money.format(data?.totalProfit ?? 0)}
@@ -576,7 +599,7 @@ function DashboardPage() {
           icon={Package}
         />
       </div>
-      {isAdmin && (
+      {isAdmin && !hideProfitCards && (
         <div className="mb-8 grid gap-3">
           <section className="rounded-xl border border-card-border bg-card p-5 md:p-6">
           <div className="mb-5 flex items-start justify-between">
