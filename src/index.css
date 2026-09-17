@@ -426,15 +426,16 @@
     top: 0;
     left: 0;
     right: 0;
-    width: 100%;
-    max-width: none !important;
-    margin: 0 !important;
-    padding: 28px 22px !important;
+    width: 72mm !important;
+    max-width: 72mm !important;
+    margin: 0 auto !important;
+    padding: 10mm 8mm !important;
     border: none !important;
     border-radius: 0 !important;
     box-shadow: none !important;
     background: #ffffff !important;
     color: #000000 !important;
+    font-family: 'Noto Kufi Arabic', 'Segoe UI', Tahoma, Arial, sans-serif !important;
   }
 
   .print-area,
@@ -459,31 +460,50 @@
   }
 
   .print-area .font-mono-app {
-    font-family: var(--app-font-mono);
+    font-family: var(--app-font-mono), ui-monospace, 'Courier New', monospace;
     font-weight: 700;
     letter-spacing: 0;
   }
 
   .print-area h1,
   .print-area .text-2xl {
-    font-size: 24px !important;
+    font-size: 26px !important;
     font-weight: 800 !important;
+    line-height: 1.2;
   }
 
   .print-area .text-lg {
+    font-size: 22px !important;
+    font-weight: 900 !important;
+  }
+
+  .print-area .text-xl {
     font-size: 20px !important;
+    font-weight: 800 !important;
+  }
+
+  .print-area .text-sm {
+    font-size: 14px !important;
     font-weight: 800 !important;
   }
 
   .print-area .text-xs,
   .print-area .text-\[10px\],
   .print-area .text-xs strong,
-  .print-area .text-xs span {
+  .print-area .text-xs span,
+  .print-area .text-\[10px\] strong {
     font-size: 13px !important;
     font-weight: 700;
+    line-height: 1.5;
   }
 
-  .print-area .text-\[10px\] strong {
-    font-weight: 700;
+  .print-area .text-\[10px\] {
+    font-weight: 600;
+    opacity: 1 !important;
+  }
+
+  .print-area .font-mono-app.text-lg,
+  .print-area strong.font-mono-app {
+    font-size: 22px !important;
   }
 }
