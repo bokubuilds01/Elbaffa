@@ -85,6 +85,7 @@ import {
 import { cn } from '@/lib/utils';
 import { ErrorBoundary } from '@/components/error-boundary';
 import { ToastProvider, useToast } from '@/components/Toast';
+import { ConfirmProvider, useConfirm } from '@/components/ConfirmDialog';
 import { checkLowStock } from '@/lib/lowStockAlert';
 const money = new Intl.NumberFormat('ar-EG-u-nu-latn', { style: 'currency', currency: 'EGP', maximumFractionDigits: 2 });
 
@@ -502,6 +503,8 @@ function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [showAddRoom, setShowAddRoom] = useState(false);
   const { profile, isAdmin, hideProfitCards, setHideProfitCards } = useAuth();
+  const { toast } = useToast();
+  const { confirm } = useConfirm();
   const [profitToggleBusy, setProfitToggleBusy] = useState(false);
 
   const toggleProfitVisibility = async () => {
@@ -537,12 +540,19 @@ function DashboardPage() {
 
   const handleDeleteRoom = async (room: Room) => {
     if (!isAdmin) return;
-    if (!confirm(`هل أنت متأكد من حذف ${room.name}؟`)) return;
+    const ok = await confirm({
+      title: `حذف ${room.name}`,
+      message: 'في حالة وجود طلب مفتوح سيتم إلغاؤه، وتبقى الفواتير القديمة محفوظة في السجل.',
+      confirmText: 'حذف',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await apiDeleteRoom(room.id);
+      toast({ type: 'success', title: 'تم حذف الغرفة', description: `أُرشفت ${room.name}` });
       await load();
     } catch (err: any) {
-      alert(err.message || 'حدث خطأ أثناء الحذف');
+      toast({ type: 'error', title: 'تعذّر الحذف', description: err.message || 'حدث خطأ أثناء الحذف' });
     }
   };
 
@@ -1005,7 +1015,7 @@ function RoomPage() {
         return next;
       });
     } catch (err: any) {
-      alert(err.message || 'حدث خطأ أثناء تأكيد الدفع');
+      toast({ type: 'error', title: 'تعذّر تأكيد الدفع', description: err.message || 'حدث خطأ أثناء تأكيد الدفع' });
     }
   };
 
@@ -1440,6 +1450,8 @@ function RoomPage() {
 
 function ProductsPage() {
   const { isAdmin } = useAuth();
+  const { toast } = useToast();
+  const { confirm } = useConfirm();
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
@@ -1486,9 +1498,21 @@ function ProductsPage() {
   };
 
   const remove = async (id: number) => {
-    if (!confirm('هل أنت متأكد من حذف هذا المنتج؟')) return;
-    await apiDeleteProduct(id);
-    await load();
+    if (!isAdmin) return;
+    const ok = await confirm({
+      title: 'حذف المنتج',
+      message: 'سيتم حذف المنتج نهائياً من الكتالوج.',
+      confirmText: 'حذف',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await apiDeleteProduct(id);
+      toast({ type: 'success', title: 'تم حذف المنتج' });
+      await load();
+    } catch (err: any) {
+      toast({ type: 'error', title: 'تعذّر الحذف', description: err.message || 'حدث خطأ أثناء الحذف' });
+    }
   };
 
   return (
@@ -1752,18 +1776,28 @@ function SalesPage() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
   const { isAdmin } = useAuth();
+  const { toast } = useToast();
+  const { confirm } = useConfirm();
 
   useEffect(() => {
     apiListSales().then(setSales).finally(() => setLoading(false));
   }, []);
 
   const removeSale = async (id: number) => {
-    if (!confirm('هل أنت متأكد من حذف هذه الفاتورة؟')) return;
+    if (!isAdmin) return;
+    const ok = await confirm({
+      title: 'حذف الفاتورة',
+      message: 'سيتم حذف الفاتورة نهائياً وإعادة المخزون إلى مخزنه.',
+      confirmText: 'حذف',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       await apiDeleteSale(id);
+      toast({ type: 'success', title: 'تم حذف الفاتورة' });
       setSales((prev) => prev.filter((s) => s.id !== id));
     } catch (err: any) {
-      alert(err.message || 'حدث خطأ أثناء حذف الفاتورة');
+      toast({ type: 'error', title: 'تعذّر الحذف', description: err.message || 'حدث خطأ أثناء حذف الفاتورة' });
     }
   };
 
@@ -2455,6 +2489,14 @@ function QuickSalePage() {
 // Reports Page
 // ============================================================
 
+function niceCeil(n: number): number {
+  if (n <= 0) return 100;
+  const pow = Math.pow(10, Math.floor(Math.log10(n)));
+  const f = n / pow;
+  const nice = f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10;
+  return nice * pow;
+}
+
 function ReportsPage() {
   const [reports, setReports] = useState<Reports | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2464,12 +2506,15 @@ function ReportsPage() {
   }, []);
 
   const r = reports ?? { today: 0, yesterday: 0, week: 0, month: 0, totalItems: 0, totalRevenue: 0, hourly: [], byRoom: [], byEmployee: [], topProducts: [], topProfit: [] };
-  const maxHour = Math.max(...r.hourly, 1);
-  const hours = r.hourly.map((v) => Math.round((v / maxHour) * 100));
+  const maxV = Math.max(...r.hourly, 1);
+  const niceMax = niceCeil(maxV);
+  const ticks = [0, niceMax / 4, niceMax / 2, (niceMax * 3) / 4, niceMax];
+  const total12 = r.hourly.reduce((a, b) => a + b, 0);
   const labels = r.hourly.map((_, i) => {
     const d = new Date(Date.now() - (11 - i) * 3600 * 1000);
     return `${String(d.getHours()).padStart(2, '0')}:00`;
   });
+  const shortMoney = (v: number) => (v >= 1000 ? `${Math.round(v / 1000)}k` : String(Math.round(v / 10) * 10));
 
   return (
     <>
@@ -2512,26 +2557,56 @@ function ReportsPage() {
               <h2 className="text-sm font-extrabold">إيقاع المبيعات</h2>
               <p className="mt-1 text-[10px] text-muted-foreground">آخر 12 ساعة تشغيل</p>
             </div>
-            <Badge tone="neutral">{money.format(r.hourly.reduce((a, b) => a + b, 0))}</Badge>
+            <Badge tone="neutral">{money.format(total12)}</Badge>
           </div>
-          <div className="mt-10 flex h-48 items-end gap-2 border-b border-border px-2">
-            {hours.map((height, i) => (
-              <div key={i} className="group relative flex-1" title={`${money.format(r.hourly[i] ?? 0)}`}>
-                <div className="absolute -top-6 left-1/2 hidden -translate-x-1/2 rounded bg-foreground px-2 py-1 font-mono-app text-[8px] text-background group-hover:block">
-                  {money.format(r.hourly[i] ?? 0)}
+          {total12 <= 0 ? (
+            <div className="mt-10 grid h-48 place-items-center rounded-lg border border-dashed border-border text-xs text-muted-foreground">
+              لا توجد مبيعات في آخر 12 ساعة
+            </div>
+          ) : (
+            <div dir="ltr" className="mt-8">
+              <div className="flex h-56 gap-2">
+                <div className="flex h-full w-11 flex-col justify-between pb-5 text-right font-mono-app text-[9px] text-muted-foreground">
+                  {[...ticks].reverse().map((t, i) => (
+                    <span key={i} className={cn(i === 0 && 'opacity-0')}>{shortMoney(t)}</span>
+                  ))}
                 </div>
-                <div
-                  className={cn('w-full rounded-t-sm transition-all group-hover:bg-primary', (r.hourly[i] ?? 0) > 0 ? 'bg-primary/60' : 'bg-primary/10')}
-                  style={{ height: `${Math.max(height, 2)}%` }}
-                />
+                <div className="relative flex-1">
+                  <div className="pointer-events-none absolute inset-0 flex flex-col justify-between pb-5">
+                    {ticks.slice(0, -1).map((_, i) => (
+                      <div key={i} className="border-t border-dashed border-border/60" />
+                    ))}
+                    <div className="border-t border-border" />
+                  </div>
+                  <div className="relative flex h-full items-stretch gap-1.5 pb-5">
+                    {r.hourly.map((v, i) => {
+                      const height = Math.round((v / niceMax) * 100);
+                      const isPeak = v > 0 && v === maxV;
+                      return (
+                        <div key={i} className="group relative flex flex-1 items-end" title={`${money.format(v)}`}>
+                          <div className="absolute -top-6 left-1/2 z-10 hidden -translate-x-1/2 whitespace-nowrap rounded bg-foreground px-2 py-1 font-mono-app text-[9px] text-background group-hover:block">
+                            {money.format(v)}
+                          </div>
+                          <div
+                            className={cn(
+                              'w-full max-w-7 rounded-t-sm transition-all duration-300 group-hover:bg-primary',
+                              v <= 0 ? 'bg-primary/10' : isPeak ? 'bg-primary' : 'bg-primary/60',
+                            )}
+                            style={{ height: `${Math.max(height, 2)}%` }}
+                          />
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
               </div>
-            ))}
-          </div>
-          <div className="mt-3 flex justify-between px-1 font-mono-app text-[9px] text-muted-foreground">
-            {labels.map((label, i) => (
-              <span key={i}>{label}</span>
-            ))}
-          </div>
+              <div className="mt-2 flex items-center justify-between gap-1 font-mono-app text-[9px] text-muted-foreground">
+                {labels.map((label, i) => (
+                  <span key={i} className={cn(i !== 0 && i !== labels.length - 1 && 'opacity-40')}>{label}</span>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
         <div className="space-y-5">
           <ReportList title="الأكثر مبيعاً" items={r.topProducts} suffix="قطعة" />
@@ -2946,6 +3021,8 @@ function ShiftPage() {
 
 function UsersPage() {
   const { isAdmin, profile } = useAuth();
+  const { toast } = useToast();
+  const { confirm } = useConfirm();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<'create' | null>(null);
@@ -2964,16 +3041,23 @@ function UsersPage() {
 
   const handleDelete = async (user: UserProfile) => {
     if (profile && user.id === profile.id) {
-      alert('لا يمكنك حذف حسابك الحالي');
+      toast({ type: 'warning', title: 'لا يمكنك حذف حسابك الحالي' });
       return;
     }
-    if (!confirm(`هل أنت متأكد من حذف ${user.name}؟`)) return;
+    const ok = await confirm({
+      title: `حذف ${user.name}`,
+      message: 'سيتم حذف الحساب نهائياً وربط فواتيره السابقة بسجل مفصول.',
+      confirmText: 'حذف',
+      danger: true,
+    });
+    if (!ok) return;
     try {
       const { deleteUser } = await import('@/lib/api');
       await deleteUser(user.id);
+      toast({ type: 'success', title: 'تم حذف الحساب', description: `حُذف ${user.name}` });
       await load();
     } catch (err: any) {
-      alert(err.message || 'حدث خطأ أثناء الحذف');
+      toast({ type: 'error', title: 'تعذّر الحذف', description: err.message || 'حدث خطأ أثناء الحذف' });
     }
   };
 
@@ -3603,16 +3687,18 @@ function App() {
 
   return (
     <ToastProvider>
-      <AuthProvider>
-        <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
-          <ErrorBoundary resetKey={window.location.pathname}>
-            <AppRouter
-              theme={theme}
-              onToggleTheme={() => setTheme((c) => c === 'light' ? 'dark' : 'light')}
-            />
-          </ErrorBoundary>
-        </WouterRouter>
-      </AuthProvider>
+      <ConfirmProvider>
+        <AuthProvider>
+          <WouterRouter base={import.meta.env.BASE_URL.replace(/\/$/, '')}>
+            <ErrorBoundary resetKey={window.location.pathname}>
+              <AppRouter
+                theme={theme}
+                onToggleTheme={() => setTheme((c) => c === 'light' ? 'dark' : 'light')}
+              />
+            </ErrorBoundary>
+          </WouterRouter>
+        </AuthProvider>
+      </ConfirmProvider>
     </ToastProvider>
   );
 }

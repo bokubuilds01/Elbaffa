@@ -1,6 +1,23 @@
 import { supabase } from '@/lib/supabase';
 
 // ============================================================
+// Pagination helper
+// Supabase caps a single query at 1000 rows. Since closed orders can
+// exceed that in a busy month, aggregate reads are fetched page by page.
+// ============================================================
+async function fetchAllRows(build: (from: number, to: number) => PromiseLike<{ data: any[] | null }>, hardLimit = 20000): Promise<any[]> {
+  const rows: any[] = [];
+  const size = 1000;
+  for (let from = 0; from < hardLimit; from += size) {
+    const { data } = await build(from, from + size - 1);
+    if (!data || data.length === 0) break;
+    rows.push(...data);
+    if (data.length < size) break;
+  }
+  return rows;
+}
+
+// ============================================================
 // Types
 // ============================================================
 export interface Room {
@@ -628,7 +645,15 @@ export async function getDashboard(): Promise<Dashboard> {
     supabase.from('sales').select('total, created_at, room_id').gte('created_at', monthStart.toISOString()),
     supabase.from('products').select('stock, low_stock_limit'),
     listRooms(),
-    supabase.from('orders').select('created_at, order_items(quantity, unit_price, products(cost_price))').eq('status', 'closed').gte('closed_at', monthStart.toISOString()),
+    fetchAllRows((from, to) =>
+      supabase
+        .from('orders')
+        .select('created_at, closed_at, order_items(quantity, unit_price, products(cost_price))')
+        .eq('status', 'closed')
+        .gte('closed_at', monthStart.toISOString())
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
   ]);
 
   const monthSales = salesRes.data ?? [];
@@ -640,7 +665,7 @@ export async function getDashboard(): Promise<Dashboard> {
 
   let totalProfit = 0;
   let todayItems = 0;
-  for (const order of (closedOrders.data ?? []) as any[]) {
+  for (const order of (closedOrders ?? []) as any[]) {
     const isToday = new Date(order.created_at) >= today;
     for (const item of (order.order_items ?? []) as any[]) {
       const qty = num(item.quantity);
@@ -676,9 +701,17 @@ export async function getReports(): Promise<Reports> {
 
   const [salesRes, roomsRes, usersRes, ordersRes] = await Promise.all([
     supabase.from('sales').select('id, total, room_id, employee_id, created_at').gte('created_at', startOfMonth.toISOString()),
-    supabase.from('rooms').select('id, name'),
+    supabase.from('rooms').select('id, name').is('deleted_at', null),
     supabase.from('users').select('id, name'),
-    supabase.from('orders').select('status, order_items(quantity, unit_price, products(name, cost_price))').eq('status', 'closed'),
+    fetchAllRows((from, to) =>
+      supabase
+        .from('orders')
+        .select('closed_at, order_items(quantity, unit_price, products(name, cost_price))')
+        .eq('status', 'closed')
+        .gte('closed_at', startOfMonth.toISOString())
+        .order('id', { ascending: true })
+        .range(from, to),
+    ),
   ]);
 
   const sales = salesRes.data ?? [];
@@ -698,7 +731,7 @@ export async function getReports(): Promise<Reports> {
 
   const productsMap = new Map<string, { label: string; quantity: number; profit: number }>();
   let totalItems = 0;
-  for (const order of (ordersRes.data ?? []) as any[]) {
+  for (const order of (ordersRes ?? []) as any[]) {
     for (const item of (order.order_items ?? []) as any[]) {
       const qty = num(item.quantity);
       const unitPrice = num(item.unit_price);
