@@ -244,9 +244,16 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
   );
 }
 
-function StatCard({ label, value, detail, icon: Icon, accent = false }: { label: string; value: string; detail: string; icon: typeof TrendingUp; accent?: boolean }) {
+function StatCard({ label, value, detail, icon: Icon, accent = false, onClick }: { label: string; value: string; detail: string; icon: typeof TrendingUp; accent?: boolean; onClick?: () => void }) {
   return (
-    <div className={cn('rounded-xl border p-5 transition-transform hover:-translate-y-0.5', accent ? 'border-primary bg-primary text-white' : 'border-card-border bg-card')}>
+    <div
+      className={cn('rounded-xl border p-5 transition-transform', onClick && 'cursor-pointer hover:-translate-y-0.5', accent ? 'border-primary bg-primary text-white' : 'border-card-border bg-card')}
+      onClick={onClick}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      title={onClick ? 'اضغط لعرض التفاصيل' : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === 'Enter') onClick(); } : undefined}
+    >
       <div className="flex items-start justify-between">
         <span className={cn('text-[11px] font-semibold', accent ? 'text-white/70' : 'text-muted-foreground')}>
           {label}
@@ -582,8 +589,9 @@ function DashboardPage() {
         <StatCard
             label="أرباح إجمالية"
             value={money.format(data?.totalProfit ?? 0)}
-            detail="صافي الربح من الطلبات المغلقة"
+            detail="صافي الربح من الطلبات المغلقة — اضغط لتفاصيل المبيعات"
             icon={BarChart3}
+            onClick={() => setLocation('/sales')}
           />
         )}
         <StatCard
@@ -789,6 +797,7 @@ function RoomPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [barcode, setBarcode] = useState('');
+  const [barcodeError, setBarcodeError] = useState('');
   const barcodeRef = useRef<HTMLInputElement>(null);
   const orderRef = useRef<Order | null>(null);
   const syncTimer = useRef<number | null>(null);
@@ -1030,9 +1039,21 @@ function RoomPage() {
 
   const handleBarcode = (e: React.FormEvent) => {
     e.preventDefault();
-    const product = products.find((p) => p.barcode === barcode);
-    if (product) addProduct(product);
-    setBarcode('');
+    const code = barcode.trim();
+    if (!code) return;
+    const product = products.find((p) => p.barcode === code);
+    if (product) {
+      if (product.stock <= 0) {
+        setBarcodeError('هذا المنتج نفد من المخزون');
+      } else {
+        addProduct(product);
+        setBarcode('');
+        setBarcodeError('');
+      }
+    } else {
+      setBarcodeError('الباركود غير موجود');
+    }
+    barcodeRef.current?.focus();
   };
 
   const performClose = async (withPrint: boolean) => {
@@ -1114,17 +1135,20 @@ function RoomPage() {
               <h2 className="text-sm font-extrabold">كتالوج المنتجات</h2>
               <p className="mt-1 text-[10px] text-muted-foreground">انقر للإضافة أو استخدم قارئ الباركود</p>
             </div>
-            <form onSubmit={handleBarcode} className="flex h-10 w-full max-w-[280px] items-center gap-2 rounded-lg border border-input bg-background px-3">
+            <form onSubmit={handleBarcode} className={`flex h-10 w-full max-w-[280px] items-center gap-2 rounded-lg border bg-background px-3 ${barcodeError ? 'border-red-500' : 'border-input'}`}>
               <ScanLine size={15} className="text-primary" />
               <input
                 ref={barcodeRef}
                 value={barcode}
-                onChange={(e) => setBarcode(e.target.value)}
+                onChange={(e) => { setBarcode(e.target.value); if (barcodeError) setBarcodeError(''); }}
                 placeholder="مسح الباركود..."
                 className="min-w-0 flex-1 bg-transparent text-[11px] outline-none"
                 data-testid="input-barcode-scanner"
               />
             </form>
+            {barcodeError && (
+              <p className="mt-1 max-w-[280px] text-[11px] font-semibold text-red-500" data-testid="room-barcode-error">{barcodeError}</p>
+            )}
           </div>
           <div className="relative mb-5">
             <Search size={15} className="absolute right-3 top-3 text-muted-foreground" />
@@ -2563,7 +2587,6 @@ function ShiftPage() {
     try {
       const s = await apiGetCurrentShift();
       setOpenShift(s);
-      if (s) setCountedCash(String(s.summary.expected_cash));
       const hs = await apiListHandovers(isAdmin ? undefined : profile?.id);
       setHandovers(hs);
       if (isAdmin) {
@@ -3313,7 +3336,7 @@ function SettingsPage({ theme, onToggleTheme }: { theme: Theme; onToggleTheme: (
           <div className="rounded-xl border border-card-border bg-card p-5">
             <div className="mb-5">
               <h2 className="text-sm font-extrabold">الشعار</h2>
-              <p className="mt-1 text-[10px] text-muted-foreground">ارفع صورة لogo تظهر لجميع المستخدمين في الموقع.</p>
+              <p className="mt-1 text-[10px] text-muted-foreground">ارفع صورة للشعار تظهر لجميع المستخدمين في الموقع.</p>
             </div>
             <div className="flex items-center gap-5">
               <div className="grid h-16 w-16 place-items-center rounded-xl bg-secondary">

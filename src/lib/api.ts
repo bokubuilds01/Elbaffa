@@ -220,7 +220,7 @@ async function recalcOrderTotal(orderId: number): Promise<number> {
 // ============================================================
 export async function listRooms(): Promise<Room[]> {
   const [roomsRes, ordersRes] = await Promise.all([
-    supabase.from('rooms').select('*').order('id'),
+    supabase.from('rooms').select('*').is('deleted_at', null).order('id'),
     supabase.from('orders').select('id, room_id, order_items(quantity, unit_price)').eq('status', 'open'),
   ]);
 
@@ -257,15 +257,8 @@ export async function createRoom(name: string): Promise<Room> {
 }
 
 export async function deleteRoom(id: number): Promise<void> {
-  const { data: openOrder } = await supabase
-    .from('orders')
-    .select('id')
-    .eq('room_id', id)
-    .eq('status', 'open')
-    .limit(1)
-    .maybeSingle();
-  if (openOrder) throw new Error('لا يمكن حذف غرفة بها طلب مفتوح');
-  await supabase.from('rooms').delete().eq('id', id);
+  const { error } = await supabase.rpc('delete_room', { p_room_id: id });
+  if (error) throw new Error(error.message);
 }
 
 // ============================================================
