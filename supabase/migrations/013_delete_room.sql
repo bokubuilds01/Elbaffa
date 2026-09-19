@@ -38,6 +38,5 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.delete_room(INTEGER) TO admin;
 GRANT EXECUTE ON FUNCTION public.delete_room(INTEGER) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.delete_room(INTEGER) FROM PUBLIC;

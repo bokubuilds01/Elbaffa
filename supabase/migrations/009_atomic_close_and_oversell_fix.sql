@@ -221,7 +221,6 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION public.delete_sale(BIGINT) TO admin;
 GRANT EXECUTE ON FUNCTION public.delete_sale(BIGINT) TO authenticated;
 REVOKE EXECUTE ON FUNCTION public.delete_sale(BIGINT) FROM PUBLIC;
 
