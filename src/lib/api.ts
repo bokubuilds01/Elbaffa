@@ -789,6 +789,106 @@ export async function getReports(): Promise<Reports> {
 }
 
 // ============================================================
+// Owner profit account (admin): month profit + payouts + Excel rows
+// ============================================================
+export interface OwnerProfit {
+  earned: number;
+  paid: number;
+  balance: number;
+}
+
+export interface OwnerPayout {
+  id: number;
+  amount: number;
+  note: string | null;
+  employee: string;
+  createdAt: string;
+}
+
+export interface ProfitRow {
+  date: string;
+  invoice: string;
+  product: string;
+  quantity: number;
+  unitPrice: number;
+  costPrice: number;
+  profit: number;
+}
+
+export async function getOwnerProfit(): Promise<OwnerProfit> {
+  const { data, error } = await supabase.rpc('get_owner_profit');
+  if (error) throw new Error(error.message);
+  const d = (data ?? {}) as any;
+  return { earned: num(d.earned), paid: num(d.paid), balance: num(d.balance) };
+}
+
+export async function listOwnerPayouts(): Promise<OwnerPayout[]> {
+  const { data } = await supabase
+    .from('owner_payouts')
+    .select('id, amount, note, created_at, users!owner_payouts_employee_id_fkey(name)')
+    .order('created_at', { ascending: false });
+  return (data ?? []).map((p) => ({
+    id: p.id,
+    amount: num(p.amount),
+    note: p.note,
+    employee: (p.users as any)?.name ?? 'موظف',
+    createdAt: p.created_at,
+  }));
+}
+
+export async function addOwnerPayout(amount: number, note?: string): Promise<void> {
+  const { error } = await supabase.rpc('add_owner_payout', { p_amount: amount, p_note: note || null });
+  if (error) throw new Error(error.message);
+}
+
+export async function deleteOwnerPayout(id: number): Promise<void> {
+  const { error } = await supabase.rpc('delete_owner_payout', { p_id: id });
+  if (error) throw new Error(error.message);
+}
+
+export async function exportProfitRows(): Promise<{ rows: ProfitRow[]; month: string }> {
+  const now = new Date();
+  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+  const monthLabel = startOfMonth.toLocaleDateString('ar-EG-u-nu-latn', { month: 'long', year: 'numeric' });
+
+  const orders = await fetchAllRows((from, to) =>
+    supabase
+      .from('orders')
+      .select('closed_at, order_items(quantity, unit_price, products(name, cost_price))')
+      .eq('status', 'closed')
+      .gte('closed_at', startOfMonth.toISOString())
+      .order('id', { ascending: true })
+      .range(from, to),
+  );
+
+  const invRes = await supabase
+    .from('sales')
+    .select('order_id, invoice_number')
+    .gte('created_at', startOfMonth.toISOString());
+  const invoiceByOrder = new Map<number, string>();
+  for (const s of invRes.data ?? []) invoiceByOrder.set(s.order_id, s.invoice_number);
+
+  const rows: ProfitRow[] = [];
+  for (const order of orders as any[]) {
+    for (const item of (order.order_items ?? []) as any[]) {
+      const qty = num(item.quantity);
+      const unitPrice = num(item.unit_price);
+      const costPrice = num(item.products?.cost_price);
+      rows.push({
+        date: new Date(order.closed_at).toLocaleDateString('ar-EG-u-nu-latn'),
+        invoice: invoiceByOrder.get(order.id) ?? '',
+        product: item.products?.name ?? 'منتج',
+        quantity: qty,
+        unitPrice,
+        costPrice,
+        profit: (unitPrice - costPrice) * qty,
+      });
+    }
+  }
+  return { rows, month: monthLabel };
+}
+
+// ============================================================
 // Users
 // ============================================================
 export async function listUsers(): Promise<UserProfile[]> {

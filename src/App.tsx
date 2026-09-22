@@ -11,6 +11,7 @@ import {
   CircleAlert,
   CircleCheck,
   Clock,
+  Download,
   FileBarChart,
   History,
   Home,
@@ -25,6 +26,7 @@ import {
   Plus,
   Printer,
   RefreshCw,
+  ReceiptText,
   Search,
   ScanLine,
   Settings,
@@ -35,6 +37,7 @@ import {
   TrendingUp,
   Upload,
   Users,
+  Wallet,
   X,
   Zap,
 } from 'lucide-react';
@@ -70,11 +73,18 @@ import {
   createRoom as apiCreateRoom,
   deleteRoom as apiDeleteRoom,
   updateProduct as apiUpdateProduct,
+  getOwnerProfit as apiGetOwnerProfit,
+  listOwnerPayouts as apiListOwnerPayouts,
+  addOwnerPayout as apiAddOwnerPayout,
+  deleteOwnerPayout as apiDeleteOwnerPayout,
+  exportProfitRows as apiExportProfitRows,
   type Dashboard,
   type Invoice,
   type OpenShift,
   type Order,
   type OrderItem,
+  type OwnerProfit,
+  type OwnerPayout,
   type Product,
   type Reports,
   type Room,
@@ -502,6 +512,8 @@ function DashboardPage() {
   const [data, setData] = useState<Dashboard | null>(null);
   const [loading, setLoading] = useState(true);
   const [showAddRoom, setShowAddRoom] = useState(false);
+  const [profitOpen, setProfitOpen] = useState(false);
+  const [ownerProfit, setOwnerProfit] = useState<OwnerProfit | null>(null);
   const { profile, isAdmin, hideProfitCards, setHideProfitCards } = useAuth();
   const { toast } = useToast();
   const { confirm } = useConfirm();
@@ -520,9 +532,12 @@ function DashboardPage() {
     try {
       const d = await apiGetDashboard();
       setData(d);
+      if (isAdmin) {
+        try { setOwnerProfit(await apiGetOwnerProfit()); } catch { /* RPC may not exist yet */ }
+      }
     } catch { /* fallback */ }
     setLoading(false);
-  }, []);
+  }, [isAdmin]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -598,10 +613,11 @@ function DashboardPage() {
         {isAdmin && !hideProfitCards && (
         <StatCard
             label="أرباح إجمالية"
-            value={money.format(data?.totalProfit ?? 0)}
-            detail="صافي الربح من الطلبات المغلقة — اضغط لتفاصيل المبيعات"
+            value={money.format(ownerProfit?.balance ?? data?.totalProfit ?? 0)}
+            detail="رصيد الأرباح القابل للتصفية — اضغط للإدارة والتصدير"
             icon={BarChart3}
-            onClick={() => setLocation('/sales')}
+            onClick={() => setProfitOpen(true)}
+            accent
           />
         )}
         <StatCard
@@ -689,6 +705,9 @@ function DashboardPage() {
       </section>
       {showAddRoom && (
         <AddRoomModal onClose={() => setShowAddRoom(false)} onAdded={() => { setShowAddRoom(false); load(); }} />
+      )}
+      {profitOpen && isAdmin && (
+        <ProfitAccountModal onClose={() => setProfitOpen(false)} onChanged={() => load()} />
       )}
     </>
   );
@@ -788,6 +807,190 @@ function AddRoomModal({ onClose, onAdded }: { onClose: () => void; onAdded: () =
           <Plus size={15} />
         </Button>
       </form>
+    </Modal>
+  );
+}
+
+// ============================================================
+// Owner Profit Account Modal (admin)
+// ============================================================
+function ProfitAccountModal({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
+  const { toast } = useToast();
+  const { confirm } = useConfirm();
+  const [, setLocation] = useLocation();
+  const [summary, setSummary] = useState<OwnerProfit | null>(null);
+  const [payouts, setPayouts] = useState<OwnerPayout[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [amount, setAmount] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const [s, p] = await Promise.all([apiGetOwnerProfit(), apiListOwnerPayouts()]);
+      setSummary(s);
+      setPayouts(p);
+    } catch {
+      /* ignore */
+    }
+    setLoading(false);
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setAmount(String(summary?.balance ?? 0)); }, [summary?.balance]);
+
+  const submitPayout = async () => {
+    const value = Math.round((Number(amount) || 0) * 100) / 100;
+    if (value <= 0) {
+      toast({ type: 'warning', title: 'أدخل مبلغاً أكبر من صفر' });
+      return;
+    }
+    setSaving(true);
+    try {
+      await apiAddOwnerPayout(value, note.trim() || undefined);
+      toast({ type: 'success', title: 'تم تسجيل السحب', description: `تم سحب ${money.format(value)} من الأرباح` });
+      setNote('');
+      await load();
+      onChanged();
+    } catch (err: any) {
+      toast({ type: 'error', title: 'تعذّر التسجيل', description: err.message || 'حدث خطأ' });
+    }
+    setSaving(false);
+  };
+
+  const removePayout = async (p: OwnerPayout) => {
+    const ok = await confirm({
+      title: `حذف سحب ${money.format(p.amount)}`,
+      message: 'سيُغيّر الرصيد فوراً، هل أنت متأكد؟',
+      confirmText: 'حذف',
+      danger: true,
+    });
+    if (!ok) return;
+    try {
+      await apiDeleteOwnerPayout(p.id);
+      toast({ type: 'success', title: 'تم حذف السحب' });
+      await load();
+      onChanged();
+    } catch (err: any) {
+      toast({ type: 'error', title: 'تعذّر الحذف', description: err.message || 'حدث خطأ' });
+    }
+  };
+
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const { rows, month } = await apiExportProfitRows();
+      const XLSX = await import('xlsx');
+      const aoa: (string | number)[][] = [
+        ['التاريخ', 'رقم الفاتورة', 'الصنف', 'الكمية', 'سعر البيع', 'التكلفة', 'الربح'],
+        ...rows.map((r) => [r.date, r.invoice, r.product, r.quantity, r.unitPrice, r.costPrice, r.profit]),
+        [],
+        ['الإجمالي', '', '', rows.reduce((s, r) => s + r.quantity, 0), '', '', rows.reduce((s, r) => s + r.profit, 0)],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 12 }, { wch: 14 }, { wch: 24 }, { wch: 9 }, { wch: 12 }, { wch: 12 }, { wch: 12 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'الأرباح');
+      XLSX.writeFile(wb, `ارباح-${month}.xlsx`);
+      toast({ type: 'success', title: 'تم تصدير الأرباح', description: 'ملف Excel جاهز للتحميل' });
+    } catch (err: any) {
+      toast({ type: 'error', title: 'تعذّر التصدير', description: err?.message || 'حدث خطأ' });
+    }
+    setExporting(false);
+  };
+
+  const settled = summary ?? { earned: 0, paid: 0, balance: 0 };
+
+  return (
+    <Modal title="حساب الأرباح الإجمالية" onClose={onClose}>
+      <div className="space-y-5">
+        <div className="grid grid-cols-3 gap-2 text-center">
+          <div className="rounded-lg border border-card-border bg-secondary/40 p-3">
+            <p className="text-[10px] text-muted-foreground">محقق هذا الشهر</p>
+            <p className="mt-1 font-mono-app text-sm font-black">{money.format(settled.earned)}</p>
+          </div>
+          <div className="rounded-lg border border-card-border bg-secondary/40 p-3">
+            <p className="text-[10px] text-muted-foreground">مسحوب بالفعل</p>
+            <p className="mt-1 font-mono-app text-sm font-black">{money.format(settled.paid)}</p>
+          </div>
+          <div className="rounded-lg border border-primary/30 bg-primary/[0.06] p-3">
+            <p className="text-[10px] text-muted-foreground">الرصيد المتبقي</p>
+            <p className="mt-1 font-mono-app text-sm font-black text-primary">{money.format(settled.balance)}</p>
+          </div>
+        </div>
+
+        <div className="flex gap-2">
+          <Button onClick={exportExcel} disabled={exporting || loading} variant="soft" className="flex-1">
+            <Download size={15} /> {exporting ? 'جارِ التصدير...' : 'تصدير Excel'}
+          </Button>
+          <Button onClick={() => setLocation('/sales')} variant="soft" className="flex-1">
+            <ReceiptText size={15} /> عرض الفواتير
+          </Button>
+        </div>
+
+        <div className="rounded-lg border border-card-border p-4">
+          <p className="text-xs font-extrabold">تسجيل سحب من الأرباح</p>
+          <p className="mt-0.5 text-[10px] text-muted-foreground">بعد تسجيل السحب ينقص الرقم فوراً وترجع الأرباح تتراكم من جديد — تقدر تقفل الحساب في أي وقت.</p>
+          <div className="mt-3 flex gap-2">
+            <label className="block flex-1 text-[10px] font-bold">
+              المبلغ (ج.م)
+              <input
+                inputMode="decimal"
+                className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-xs font-mono-app outline-none focus:border-primary"
+                value={amount}
+                onChange={(e) => setAmount(e.target.value)}
+                data-testid="input-payout-amount"
+              />
+            </label>
+            <label className="block flex-[2] text-[10px] font-bold">
+              ملاحظة
+              <input
+                className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-xs outline-none focus:border-primary"
+                placeholder="مثال: سحب نهاية الأسبوع"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                data-testid="input-payout-note"
+              />
+            </label>
+          </div>
+          <Button onClick={submitPayout} disabled={saving || loading} className="mt-3 w-full">
+            <Wallet size={15} /> {saving ? 'جارِ التسجيل...' : 'تسجيل السحب'}
+          </Button>
+        </div>
+
+        <div>
+          <p className="mb-2 text-xs font-extrabold">أحدث السحوبات</p>
+          {loading ? (
+            <Skeleton className="h-20" />
+          ) : payouts.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-border p-3 text-center text-[10px] text-muted-foreground">
+              لا توجد سحوبات — الرصيد الحالي كله أرباح غير مسوّاة.
+            </p>
+          ) : (
+            <div className="divide-y divide-border/70 rounded-lg border border-card-border">
+              {payouts.slice(0, 12).map((p) => (
+                <div key={p.id} className="flex items-center gap-3 px-3 py-2.5 text-xs">
+                  <span className="flex-1">
+                    <span className="font-mono-app font-bold">{money.format(p.amount)}</span>
+                    {p.note && <span className="mr-2 text-[10px] text-muted-foreground">— {p.note}</span>}
+                  </span>
+                  <span className="text-[10px] text-muted-foreground">{p.employee}</span>
+                  <span className="text-[10px] text-muted-foreground">{new Date(p.createdAt).toLocaleDateString('ar-EG-u-nu-latn')}</span>
+                  <button
+                    onClick={() => removePayout(p)}
+                    className="rounded-md p-1 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                    title="حذف السحب"
+                    data-testid={`button-delete-payout-${p.id}`}
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
     </Modal>
   );
 }
