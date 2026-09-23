@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import {
   ArrowLeft,
   ArrowLeftRight,
+  Archive,
   Banknote,
   BarChart3,
   Boxes,
@@ -78,6 +79,8 @@ import {
   addOwnerPayout as apiAddOwnerPayout,
   deleteOwnerPayout as apiDeleteOwnerPayout,
   exportProfitRows as apiExportProfitRows,
+  listCloseableMonths as apiListCloseableMonths,
+  closeMonth as apiCloseMonth,
   type Dashboard,
   type Invoice,
   type OpenShift,
@@ -85,6 +88,7 @@ import {
   type OrderItem,
   type OwnerProfit,
   type OwnerPayout,
+  type CloseableMonth,
   type Product,
   type Reports,
   type Room,
@@ -820,11 +824,14 @@ function ProfitAccountModal({ onClose, onChanged }: { onClose: () => void; onCha
   const [, setLocation] = useLocation();
   const [summary, setSummary] = useState<OwnerProfit | null>(null);
   const [payouts, setPayouts] = useState<OwnerPayout[]>([]);
+  const [months, setMonths] = useState<CloseableMonth[]>([]);
   const [loading, setLoading] = useState(true);
   const [amount, setAmount] = useState('');
   const [note, setNote] = useState('');
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [selectedMonth, setSelectedMonth] = useState('');
+  const [archiving, setArchiving] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -833,6 +840,11 @@ function ProfitAccountModal({ onClose, onChanged }: { onClose: () => void; onCha
       setPayouts(p);
     } catch {
       /* ignore */
+    }
+    try {
+      setMonths(await apiListCloseableMonths());
+    } catch {
+      setMonths([]);
     }
     setLoading(false);
   }, []);
@@ -875,6 +887,36 @@ function ProfitAccountModal({ onClose, onChanged }: { onClose: () => void; onCha
     } catch (err: any) {
       toast({ type: 'error', title: 'تعذّر الحذف', description: err.message || 'حدث خطأ' });
     }
+  };
+
+  const monthName = (m: number) => ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'][m - 1] ?? '';
+
+  const archiveMonth = async () => {
+    const m = months.find((x) => `${x.year}-${x.month}` === selectedMonth);
+    if (!m) return;
+    const label = `${monthName(m.month)} ${m.year}`;
+    const ok = await confirm({
+      title: `قفل شهر ${label} نهائياً؟`,
+      message: `سيتم حذف بيانات الشهر نهائياً من القاعدة:\n• ${integer.format(m.orders)} طلب\n• ${integer.format(m.items)} صنف\n• ${integer.format(m.sales)} فاتورة\n\nتأكد أنك سحبت الأرباح (${money.format(m.profit)}) قبل الحذف. لا يمكن التراجع إطلاقاً، والشهر الحالي لا يتأثر.`,
+      confirmText: 'قفل وحذف نهائي',
+      danger: true,
+    });
+    if (!ok) return;
+    setArchiving(true);
+    try {
+      const r = await apiCloseMonth(m.year, m.month);
+      toast({
+        type: 'success',
+        title: `تم قفل شهر ${label}`,
+        description: `حُذف ${integer.format(r.orders)} طلب / ${integer.format(r.items)} صنف / ${integer.format(r.sales)} فاتورة`,
+      });
+      setSelectedMonth('');
+      await load();
+      onChanged();
+    } catch (err: any) {
+      toast({ type: 'error', title: 'تعذّر قفل الشهر', description: err.message || 'حدث خطأ' });
+    }
+    setArchiving(false);
   };
 
   const exportExcel = async () => {
@@ -987,6 +1029,44 @@ function ProfitAccountModal({ onClose, onChanged }: { onClose: () => void; onCha
                   </button>
                 </div>
               ))}
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-lg border border-destructive/25 bg-destructive/5 p-4">
+          <p className="flex items-center gap-1.5 text-xs font-extrabold">
+            <Archive size={14} className="text-destructive" /> أرشيف الشهور القديمة — حذف نهائي
+          </p>
+          <p className="mt-0.5 text-[10px] text-muted-foreground">
+            الشهر الحالي محمي تلقائياً ومبيروحش بحاجة. لما تقفل شهر وتتأكد إنك سحبت أرباحه، يظهر هنا — اضغط "قفل وحذف" لمسح بياناته (الطلبات والأصناف والفواتير) نهائياً من القاعدة وتوفير المساحة. الحذف غير راجع.
+          </p>
+          {loading ? (
+            <Skeleton className="mt-3 h-16" />
+          ) : months.length === 0 ? (
+            <p className="mt-3 rounded-lg border border-dashed border-border p-3 text-center text-[10px] text-muted-foreground">
+              لا توجد شهور قديمة قابلة للقفل — الشهور اللي قبل الشهر الحالي هي اللي بتظهر هنا.
+            </p>
+          ) : (
+            <div className="mt-3 flex flex-wrap items-end gap-2">
+              <label className="block min-w-[200px] flex-1 text-[10px] font-bold">
+                الشهر
+                <select
+                  className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-2 text-xs outline-none focus:border-primary"
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                  data-testid="select-close-month"
+                >
+                  <option value="">اختر شهر...</option>
+                  {months.map((m) => (
+                    <option key={`${m.year}-${m.month}`} value={`${m.year}-${m.month}`}>
+                      {monthName(m.month)} {m.year} — {integer.format(m.orders)} طلب / أرباح {money.format(m.profit)}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <Button variant="danger" onClick={archiveMonth} disabled={!selectedMonth || archiving} className="h-10">
+                {archiving ? 'جارِ القفل...' : 'قفل وحذف نهائي'}
+              </Button>
             </div>
           )}
         </div>

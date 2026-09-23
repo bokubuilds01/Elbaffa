@@ -846,6 +846,42 @@ export async function deleteOwnerPayout(id: number): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+// ---- Month archive (admin) ----
+export interface CloseableMonth {
+  year: number;
+  month: number;
+  orders: number;
+  items: number;
+  sales: number;
+  profit: number;
+}
+
+export interface ClosedMonthResult {
+  orders: number;
+  items: number;
+  sales: number;
+}
+
+export async function listCloseableMonths(): Promise<CloseableMonth[]> {
+  const { data, error } = await supabase.rpc('list_closeable_months');
+  if (error) throw new Error(error.message);
+  return (data ?? []).map((m: any) => ({
+    year: Number(m.year),
+    month: Number(m.month),
+    orders: Number(m.orders),
+    items: Number(m.items),
+    sales: Number(m.sales),
+    profit: num(m.profit),
+  }));
+}
+
+export async function closeMonth(year: number, month: number): Promise<ClosedMonthResult> {
+  const { data, error } = await supabase.rpc('close_month', { p_year: year, p_month: month });
+  if (error) throw new Error(error.message);
+  const d = (data ?? {}) as any;
+  return { orders: Number(d.orders ?? 0), items: Number(d.items ?? 0), sales: Number(d.sales ?? 0) };
+}
+
 export async function exportProfitRows(): Promise<{ rows: ProfitRow[]; month: string }> {
   const now = new Date();
   const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
