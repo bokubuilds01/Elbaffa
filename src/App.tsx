@@ -533,13 +533,12 @@ function DashboardPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    try {
-      const d = await apiGetDashboard();
-      setData(d);
-      if (isAdmin) {
-        try { setOwnerProfit(await apiGetOwnerProfit()); } catch { /* RPC may not exist yet */ }
-      }
-    } catch { /* fallback */ }
+    const [d, op] = await Promise.all([
+      apiGetDashboard().catch(() => null),
+      isAdmin ? apiGetOwnerProfit().catch(() => null) : Promise.resolve(null),
+    ]);
+    setData(d);
+    setOwnerProfit(op);
     setLoading(false);
   }, [isAdmin]);
 
@@ -617,8 +616,10 @@ function DashboardPage() {
         {isAdmin && !hideProfitCards && (
         <StatCard
             label="أرباح إجمالية"
-            value={money.format(ownerProfit?.balance ?? data?.totalProfit ?? 0)}
-            detail="رصيد الأرباح القابل للتصفية — اضغط للإدارة والتصدير"
+            value={money.format(ownerProfit ? ownerProfit.balance : data?.totalProfit ?? 0)}
+            detail={ownerProfit
+              ? `من أرباح محققة ${money.format(ownerProfit.earned)} هذا الشهر — اضغط للإدارة والتصدير`
+              : 'صافي الربح من الطلبات المغلقة'}
             icon={BarChart3}
             onClick={() => setProfitOpen(true)}
             accent
@@ -850,7 +851,6 @@ function ProfitAccountModal({ onClose, onChanged }: { onClose: () => void; onCha
   }, []);
 
   useEffect(() => { load(); }, [load]);
-  useEffect(() => { setAmount(String(summary?.balance ?? 0)); }, [summary?.balance]);
 
   const submitPayout = async () => {
     const value = Math.round((Number(amount) || 0) * 100) / 100;
@@ -980,6 +980,7 @@ function ProfitAccountModal({ onClose, onChanged }: { onClose: () => void; onCha
               <input
                 inputMode="decimal"
                 className="mt-1 h-10 w-full rounded-lg border border-input bg-background px-3 text-xs font-mono-app outline-none focus:border-primary"
+                placeholder="المبلغ"
                 value={amount}
                 onChange={(e) => setAmount(e.target.value)}
                 data-testid="input-payout-amount"
@@ -996,7 +997,7 @@ function ProfitAccountModal({ onClose, onChanged }: { onClose: () => void; onCha
               />
             </label>
           </div>
-          <Button onClick={submitPayout} disabled={saving || loading} className="mt-3 w-full">
+          <Button onClick={submitPayout} disabled={saving || loading || !(Number(amount) > 0)} className="mt-3 w-full">
             <Wallet size={15} /> {saving ? 'جارِ التسجيل...' : 'تسجيل السحب'}
           </Button>
         </div>
