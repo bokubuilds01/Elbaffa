@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   mapShiftSummary,
   bulkActionForSelection,
@@ -46,4 +47,19 @@ test('purge result fills missing counters with zero', () => {
   assert.deepEqual(mapPurgeResult({ sales: 3 }), {
     sales: 3, items: 0, orders: 0, payouts: 0, inventory: 0, handovers: 0, shifts: 0,
   });
+});
+
+test('API reads shift totals and exposes bulk delete without midnight math', () => {
+  const api = readFileSync(new URL('../src/lib/api.ts', import.meta.url), 'utf8');
+  assert.match(api, /supabase\.rpc\('current_shift_summary'\)/);
+  assert.match(api, /export async function deleteSales/);
+  assert.match(api, /export async function purgeAllRecords/);
+  assert.ok(!api.includes('setHours(0'), 'dashboard must not depend on local midnight');
+});
+
+test('UI shows shift cards and an admin select-all purge', () => {
+  const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');
+  for (const marker of ['صافي الشيفت الحالي', 'تحديد الكل', 'حذف كل السجلات', 'bulkActionForSelection']) {
+    assert.ok(app.includes(marker), `App.tsx must contain ${marker}`);
+  }
 });

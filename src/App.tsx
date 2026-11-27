@@ -45,6 +45,7 @@ import {
 import { Link, Redirect, Route, Router as WouterRouter, Switch, useLocation, useParams } from 'wouter';
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/lib/supabase';
+import { bulkActionForSelection } from '@/lib/pos-helpers';
 import {
   closeOrder as apiCloseOrder,
   createProduct as apiCreateProduct,
@@ -61,6 +62,8 @@ import {
   listSales as apiListSales,
   listUsers as apiListUsers,
   deleteSale as apiDeleteSale,
+  deleteSales as apiDeleteSales,
+  purgeAllRecords as apiPurgeAllRecords,
   updateUser as apiUpdateUser,
   openRoomOrder as apiOpenRoomOrder,
   openShift as apiOpenShift,
@@ -606,9 +609,9 @@ function DashboardPage() {
       <div className="mb-8 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {!hideProfitCards && (
         <StatCard
-          label="مبيعات اليوم"
-          value={money.format(data?.todaySales ?? 0)}
-          detail={isAdmin ? `الشهر الحالي: ${money.format(data?.monthSales ?? 0)}` : 'مبيعات اليوم فقط'}
+          label="صافي الشيفت الحالي"
+          value={money.format(data?.shiftSales ?? 0)}
+          detail={data?.shiftOpen ? 'من بداية الشيفت — التسليم يدوي' : 'لا يوجد شيفت مفتوح'}
           icon={TrendingUp}
           accent
         />
@@ -626,15 +629,15 @@ function DashboardPage() {
           />
         )}
         <StatCard
-          label="طلبات مغلقة"
-          value={integer.format(data?.todayOrders ?? 0)}
+          label="طلبات الشيفت"
+          value={integer.format(data?.shiftOrders ?? 0)}
           detail={`${openCount} طلبات مفتوحة حالياً`}
           icon={ShoppingBasket}
         />
         <StatCard
-          label="الأصناف المباعة"
-          value={integer.format(data?.todayItems ?? 0)}
-          detail="إجمالي الأصناف المباعة اليوم"
+          label="أصناف الشيفت"
+          value={integer.format(data?.shiftItems ?? 0)}
+          detail="من بداية الشيفت الحالي"
           icon={Package}
         />
       </div>
@@ -1098,12 +1101,14 @@ function RoomPage() {
   const syncChainRef = useRef<Promise<void> | null>(null);
   const editVersionRef = useRef(0);
   const mountedRef = useRef(true);
+  const flushPendingRef = useRef<() => Promise<void>>(async () => {});
   const [paidDrafts, setPaidDrafts] = useState<Record<number, number>>({});
   const [confirmClose, setConfirmClose] = useState(false);
   const [closing, setClosing] = useState(false);
 
   useEffect(() => { orderRef.current = order; }, [order]);
   useEffect(() => () => {
+    void flushPendingRef.current();
     mountedRef.current = false;
     if (syncTimer.current) window.clearTimeout(syncTimer.current);
   }, []);
@@ -1136,6 +1141,25 @@ function RoomPage() {
 
   // Used by close: ensure the very latest edits are persisted before closing.
   const flushSync = () => syncNow();
+
+  // Leaving a room must persist an edit still sitting in the debounce timer.
+  const flushPending = (): Promise<void> => {
+    if (syncTimer.current === null) return syncChainRef.current ?? Promise.resolve();
+    window.clearTimeout(syncTimer.current);
+    syncTimer.current = null;
+    return syncNow().catch(() => {});
+  };
+  flushPendingRef.current = flushPending;
+
+  const leaveTo = async (href: string) => {
+    try {
+      await Promise.race([
+        flushPending(),
+        new Promise<void>((resolve) => window.setTimeout(resolve, 700)),
+      ]);
+    } catch { /* navigation still proceeds */ }
+    setLocation(href);
+  };
 
   const safeSyncNow = async () => {
     try {
@@ -1322,6 +1346,7 @@ function RoomPage() {
     setTransferring(true);
     setTransferError('');
     try {
+      await flushPending();
       await apiTransferOrder(order.id, targetRoomId);
       setTransferOpen(false);
       setLocation('/dashboard');
@@ -1398,6 +1423,7 @@ function RoomPage() {
         <div className="flex items-center gap-3">
           <Link
             href="/dashboard"
+            onClick={(e) => { e.preventDefault(); void leaveTo('/dashboard'); }}
             className="grid h-9 w-9 place-items-center rounded-lg border border-border bg-card text-muted-foreground hover:text-foreground"
             data-testid="link-back-dashboard"
           >
@@ -1604,6 +1630,7 @@ function RoomPage() {
             <div className="mt-3 grid grid-cols-2 gap-3">
               <Link
                 href="/dashboard"
+                onClick={(e) => { e.preventDefault(); void leaveTo('/dashboard'); }}
                 className="inline-flex min-h-10 items-center justify-center rounded-lg bg-white/10 px-4 text-[11px] font-bold text-white/70 hover:bg-white/15"
               >
                 إلغاء
@@ -2059,6 +2086,8 @@ function InventoryPage() {
 function SalesPage() {
   const [sales, setSales] = useState<Sale[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [purging, setPurging] = useState(false);
   const { isAdmin } = useAuth();
   const { toast } = useToast();
   const { confirm } = useConfirm();
@@ -2099,8 +2128,71 @@ function SalesPage() {
   const roomSales = visibleSales.filter((s) => s.type === 'room');
   const quickSales = visibleSales.filter((s) => s.type === 'quick');
 
+  const bulkAction = useMemo(
+    () => bulkActionForSelection(selectedIds.size, visibleSales.length),
+    [selectedIds.size, visibleSales.length],
+  );
+
+  const toggleAll = () => {
+    setSelectedIds((prev) =>
+      prev.size === visibleSales.length && visibleSales.length > 0
+        ? new Set()
+        : new Set(visibleSales.map((sale) => sale.id)),
+    );
+  };
+
+  const toggleOne = (id: number) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const bulkDelete = async () => {
+    if (!isAdmin || !bulkAction) return;
+    const count = selectedIds.size;
+    const ok = await confirm(bulkAction === 'purge' ? {
+      title: 'حذف كل السجلات',
+      message: 'سيتم حذف كل الفواتير وطلبات الغرف وأصنافها وتسويات المالك وحركات المخزون وسجلات الشيفتات نهائياً. حسابات المستخدمين والمنتجات والغرف ستبقى محفوظة. لا يمكن التراجع.',
+      confirmText: 'حذف الكل',
+      danger: true,
+    } : {
+      title: `حذف ${count} فواتير`,
+      message: 'سيتم حذف الفواتير المختارة وإعادة أصنافها إلى المخزون. لا يمكن التراجع.',
+      confirmText: 'حذف',
+      danger: true,
+    });
+    if (!ok) return;
+    setPurging(true);
+    try {
+      if (bulkAction === 'purge') {
+        const result = await apiPurgeAllRecords();
+        setSales([]);
+        setSelectedIds(new Set());
+        toast({
+          type: 'success',
+          title: 'تم حذف كل السجلات',
+          description: `${result.sales} فاتورة • ${result.orders} طلب • ${result.payouts} تسوية`,
+        });
+      } else {
+        const ids = [...selectedIds];
+        await apiDeleteSales(ids);
+        setSales((prev) => prev.filter((sale) => !ids.includes(sale.id)));
+        setSelectedIds(new Set());
+        toast({ type: 'success', title: `تم حذف ${count} فاتورة` });
+      }
+    } catch (err: any) {
+      toast({ type: 'error', title: 'تعذّر الحذف', description: err.message || 'حدث خطأ أثناء الحذف' });
+    } finally {
+      setPurging(false);
+    }
+  };
+
   const invoiceHeader = (
     <tr>
+      {isAdmin && <th className="w-10 px-5 py-4"><span className="sr-only">تحديد</span></th>}
       <th className="px-5 py-4">رقم الفاتورة</th>
       <th className="px-5 py-4">الغرفة</th>
       <th className="px-5 py-4">الموظف</th>
@@ -2114,6 +2206,18 @@ function SalesPage() {
   const invoiceRows = (list: Sale[]) => (
     list.map((sale) => (
       <tr key={sale.id} className="text-xs hover:bg-secondary/30" data-testid={`row-sale-${sale.id}`}>
+        {isAdmin && (
+          <td className="px-5 py-4">
+            <input
+              type="checkbox"
+              checked={selectedIds.has(sale.id)}
+              onChange={() => toggleOne(sale.id)}
+              className="h-4 w-4 accent-primary"
+              aria-label={`تحديد الفاتورة ${sale.invoiceNumber}`}
+              data-testid={`checkbox-sale-${sale.id}`}
+            />
+          </td>
+        )}
         <td className="px-5 py-4">
           <Link
             href={`/sales/${sale.id}`}
@@ -2160,6 +2264,34 @@ function SalesPage() {
         title="سجل المبيعات"
         detail="كل الفواتير المغلقة في ورديات المكان."
       />
+      {isAdmin && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-card-border bg-card px-4 py-3">
+          <label className="flex cursor-pointer items-center gap-2 text-xs font-bold">
+            <input
+              type="checkbox"
+              checked={visibleSales.length > 0 && selectedIds.size === visibleSales.length}
+              onChange={toggleAll}
+              className="h-4 w-4 accent-primary"
+              data-testid="checkbox-select-all"
+            />
+            تحديد الكل
+          </label>
+          <span className="text-[11px] text-muted-foreground">
+            تم تحديد {selectedIds.size} من {visibleSales.length}
+          </span>
+          {bulkAction && (
+            <Button
+              variant="danger"
+              onClick={bulkDelete}
+              disabled={purging}
+              data-testid="button-bulk-delete"
+            >
+              <Trash2 size={14} />
+              {bulkAction === 'purge' ? 'حذف كل السجلات' : `حذف المحدد (${selectedIds.size})`}
+            </Button>
+          )}
+        </div>
+      )}
       <div className="mb-5 flex gap-3">
         {isAdmin && (
         <div className="rounded-lg border border-card-border bg-card px-4 py-3">
