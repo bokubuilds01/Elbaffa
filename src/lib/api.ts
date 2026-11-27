@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { mapShiftSummary, mapPurgeResult, toSyncItems, type PurgeCounts } from './pos-helpers';
 
 // ============================================================
 // Pagination helper
@@ -94,9 +95,10 @@ export interface InventoryRow {
 }
 
 export interface Dashboard {
-  todaySales: number;
-  todayOrders: number;
-  todayItems: number;
+  shiftSales: number;
+  shiftOrders: number;
+  shiftItems: number;
+  shiftOpen: boolean;
   lowStockCount: number;
   monthSales: number;
   totalProfit: number;
@@ -137,6 +139,7 @@ export interface ShiftSummary {
   sales_total: number;
   cash_sales: number;
   card_sales: number;
+  items_sold: number;
   expected_cash: number;
 }
 
@@ -354,6 +357,16 @@ export async function removeOrderItem(orderId: number, itemId: number): Promise<
 }
 
 export async function syncOrderItems(orderId: number, items: Array<{ productId: number; quantity: number }>): Promise<Order> {
+  // Fast path: one atomically executed RPC (migration 016). The legacy path
+  // below stays as a fallback until the migration is applied in Supabase.
+  const { error: rpcError } = await supabase.rpc('sync_order_items', {
+    p_order_id: orderId,
+    p_items: toSyncItems(items),
+  });
+  if (!rpcError) {
+    return (await readOrder(orderId))!;
+  }
+
   const { data: existing } = await supabase
     .from('order_items')
     .select('id, product_id')
@@ -633,15 +646,27 @@ export async function deleteSale(id: number): Promise<void> {
   if (error) throw new Error(error.message);
 }
 
+export async function deleteSales(ids: number[]): Promise<void> {
+  if (ids.length === 0) return;
+  const { error } = await supabase.rpc('admin_delete_sales', { p_ids: ids });
+  if (error) throw new Error(error.message);
+}
+
+export async function purgeAllRecords(): Promise<PurgeCounts> {
+  const { data, error } = await supabase.rpc('admin_purge_records');
+  if (error) throw new Error(error.message);
+  return mapPurgeResult(data);
+}
+
 // ============================================================
 // Dashboard
 // ============================================================
 export async function getDashboard(): Promise<Dashboard> {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
 
-  const [salesRes, productsRes, rooms, closedOrders] = await Promise.all([
+  const [shiftRes, salesRes, productsRes, rooms, closedOrders] = await Promise.all([
+    supabase.rpc('current_shift_summary'),
     supabase.from('sales').select('total, created_at, room_id').gte('created_at', monthStart.toISOString()),
     supabase.from('products').select('stock, low_stock_limit'),
     listRooms(),
@@ -656,30 +681,27 @@ export async function getDashboard(): Promise<Dashboard> {
     ),
   ]);
 
+  const shift = mapShiftSummary(shiftRes.data);
   const monthSales = salesRes.data ?? [];
-  const todaySales = monthSales.filter((s) => new Date(s.created_at) >= today)
-    .reduce((sum, s) => sum + num(s.total), 0);
   const monthTotal = monthSales.reduce((sum, s) => sum + num(s.total), 0);
   const roomSales = monthSales.filter((s) => s.room_id != null).reduce((sum, s) => sum + num(s.total), 0);
   const quickSales = monthSales.filter((s) => s.room_id == null).reduce((sum, s) => sum + num(s.total), 0);
 
   let totalProfit = 0;
-  let todayItems = 0;
   for (const order of (closedOrders ?? []) as any[]) {
-    const isToday = new Date(order.created_at) >= today;
     for (const item of (order.order_items ?? []) as any[]) {
       const qty = num(item.quantity);
       const unitPrice = num(item.unit_price);
       const cost = num(item.products?.cost_price);
       totalProfit += (unitPrice - cost) * qty;
-      if (isToday) todayItems += qty;
     }
   }
 
   return {
-    todaySales,
-    todayOrders: monthSales.filter((s) => new Date(s.created_at) >= today).length,
-    todayItems,
+    shiftSales: shift.sales,
+    shiftOrders: shift.orders,
+    shiftItems: shift.items,
+    shiftOpen: shift.open,
     lowStockCount: productsRes.data?.filter((p) => p.stock <= p.low_stock_limit).length ?? 0,
     monthSales: monthTotal,
     totalProfit,
@@ -1026,6 +1048,7 @@ export async function getCurrentShift(): Promise<OpenShift | null> {
       sales_total: num(summary?.sales_total),
       cash_sales: num(summary?.cash_sales),
       card_sales: num(summary?.card_sales),
+      items_sold: num(summary?.items_sold),
       expected_cash: num(summary?.expected_cash),
     },
   };
