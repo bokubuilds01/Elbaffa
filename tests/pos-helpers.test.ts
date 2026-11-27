@@ -62,4 +62,7 @@ test('UI shows shift cards and an admin select-all purge', () => {
   for (const marker of ['صافي الشيفت الحالي', 'تحديد الكل', 'حذف كل السجلات', 'bulkActionForSelection']) {
     assert.ok(app.includes(marker), `App.tsx must contain ${marker}`);
   }
+  // Room invoices and quick sales are separate tables; both need a per-row checkbox.
+  const rowCheckbox = 'data-testid={`checkbox-sale-${sale.id}`}';
+  assert.equal(app.split(rowCheckbox).length - 1, 2, 'both sales tables must render a row checkbox');
 });

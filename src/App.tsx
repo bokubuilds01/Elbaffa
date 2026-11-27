@@ -2350,6 +2350,7 @@ function SalesPage() {
                 <table className="w-full min-w-[760px] text-right">
                   <thead className="bg-[#e2b24b]/[0.06] text-[10px] text-muted-foreground">
                     <tr>
+                      {isAdmin && <th className="w-10 px-5 py-4"><span className="sr-only">تحديد</span></th>}
                       <th className="px-5 py-4">رقم الفاتورة</th>
                       <th className="px-5 py-4">الموظف</th>
                       <th className="px-5 py-4">التاريخ</th>
@@ -2362,6 +2363,18 @@ function SalesPage() {
                   <tbody className="divide-y divide-border/80">
                     {quickSales.map((sale) => (
                       <tr key={sale.id} className="text-xs hover:bg-[#e2b24b]/[0.04]" data-testid={`row-sale-quick-${sale.id}`}>
+                        {isAdmin && (
+                          <td className="px-5 py-4">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(sale.id)}
+                              onChange={() => toggleOne(sale.id)}
+                              className="h-4 w-4 accent-primary"
+                              aria-label={`تحديد الفاتورة ${sale.invoiceNumber}`}
+                              data-testid={`checkbox-sale-${sale.id}`}
+                            />
+                          </td>
+                        )}
                         <td className="px-5 py-4">
                           <Link
                             href={`/sales/${sale.id}`}
