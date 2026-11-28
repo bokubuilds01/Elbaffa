@@ -1768,6 +1768,8 @@ function ProductsPage() {
   const [search, setSearch] = useState('');
   const [modal, setModal] = useState<{ mode: 'create' | 'edit'; product?: Product } | null>(null);
   const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [lowStockOnly, setLowStockOnly] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1778,7 +1780,11 @@ function ProductsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const filtered = products.filter((p) => p.name.includes(search) || p.barcode.includes(search));
+  const lowStockCount = products.filter((p) => p.stock <= p.lowStockLimit).length;
+  const filtered = products.filter((p) => {
+    const matchesSearch = p.name.includes(search) || p.barcode.includes(search);
+    return matchesSearch && (!lowStockOnly || p.stock <= p.lowStockLimit);
+  });
 
   const save = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -1802,27 +1808,39 @@ function ProductsPage() {
       }
       setModal(null);
       await load();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to save product:', err);
+      const detail = err?.message || '';
+      toast({
+        type: 'error',
+        title: 'تعذّر الحفظ',
+        description: /duplicate|23505|barcode/i.test(detail)
+          ? 'الباركود مستخدم لمنتج آخر'
+          : detail || 'حدث خطأ أثناء الحفظ',
+      });
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const remove = async (id: number) => {
     if (!isAdmin) return;
     const ok = await confirm({
       title: 'حذف المنتج',
-      message: 'سيتم حذف المنتج نهائياً من الكتالوج.',
+      message: 'سيتم حذف المنتج نهائياً من الكتالوج إذا لم يكن مسجّل في فواتير سابقة. أما المنتج المستخدم في الفواتير فسيبقى كما هو.',
       confirmText: 'حذف',
       danger: true,
     });
     if (!ok) return;
+    setDeletingId(id);
     try {
       await apiDeleteProduct(id);
       toast({ type: 'success', title: 'تم حذف المنتج' });
       await load();
     } catch (err: any) {
       toast({ type: 'error', title: 'تعذّر الحذف', description: err.message || 'حدث خطأ أثناء الحذف' });
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -1851,6 +1869,13 @@ function ProductsPage() {
             data-testid="input-products-search"
           />
         </div>
+        <Button
+          variant={lowStockOnly ? 'primary' : 'soft'}
+          onClick={() => setLowStockOnly((value) => !value)}
+          data-testid="button-low-stock-filter"
+        >
+          المخزون المنخفض ({integer.format(lowStockCount)})
+        </Button>
         <Badge tone="neutral">{integer.format(filtered.length)} منتج</Badge>
       </div>
       <div className="overflow-hidden rounded-xl border border-card-border bg-card">
@@ -1861,10 +1886,12 @@ function ProductsPage() {
         ) : filtered.length === 0 ? (
           <div className="p-4">
             <EmptyState
-              title="لا توجد منتجات"
-              detail="أضف أول منتج إلى كتالوج EL BAFFA."
+              title={lowStockOnly ? 'لا توجد منتجات منخفضة المخزون' : 'لا توجد منتجات'}
+              detail={lowStockOnly ? 'كل المنتجات فوق حد التنبيه.' : 'أضف أول منتج إلى كتالوج EL BAFFA.'}
               action={
-                isAdmin ? <Button onClick={() => setModal({ mode: 'create' })}>إضافة منتج</Button> : undefined
+                !lowStockOnly && isAdmin
+                  ? <Button onClick={() => setModal({ mode: 'create' })}>إضافة منتج</Button>
+                  : undefined
               }
             />
           </div>
@@ -1877,6 +1904,7 @@ function ProductsPage() {
                   <th className="px-5 py-4">الباركود</th>
                   <th className="px-5 py-4">التصنيف</th>
                   <th className="px-5 py-4">سعر البيع</th>
+                  <th className="px-5 py-4">هامش الربح</th>
                   <th className="px-5 py-4">المخزون</th>
                   {isAdmin && <th className="px-5 py-4">إجراء</th>}
                 </tr>
@@ -1895,6 +1923,14 @@ function ProductsPage() {
                     <td className="px-5 py-4 font-mono-app text-[10px] text-muted-foreground">{product.barcode}</td>
                     <td className="px-5 py-4 text-muted-foreground">{product.category}</td>
                     <td className="px-5 py-4 font-mono-app font-bold">{money.format(product.sellingPrice)}</td>
+                    <td className="px-5 py-4 font-mono-app">
+                      {money.format(product.sellingPrice - product.costPrice)}
+                      <span className="mr-1 text-[10px] text-muted-foreground">
+                        ({product.sellingPrice > 0
+                          ? integer.format(Math.round(((product.sellingPrice - product.costPrice) / product.sellingPrice) * 100))
+                          : '0'}%)
+                      </span>
+                    </td>
                     <td className="px-5 py-4">
                       <Badge tone={product.stock === 0 ? 'danger' : product.stock <= product.lowStockLimit ? 'warning' : 'success'}>
                         {product.stock === 0 ? 'نفد' : `${product.stock} وحدة`}
@@ -1912,10 +1948,11 @@ function ProductsPage() {
                           </button>
                           <button
                             onClick={() => remove(product.id)}
-                            className="text-[10px] font-bold text-destructive hover:underline"
+                            disabled={deletingId === product.id}
+                            className="text-[10px] font-bold text-destructive hover:underline disabled:opacity-50"
                             data-testid={`button-delete-product-${product.id}`}
                           >
-                            حذف
+                            {deletingId === product.id ? 'جارٍ الحذف...' : 'حذف'}
                           </button>
                         </div>
                       </td>

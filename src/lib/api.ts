@@ -576,7 +576,8 @@ export async function updateProduct(id: number, input: Partial<Omit<Product, 'id
 }
 
 export async function deleteProduct(id: number): Promise<void> {
-  await supabase.from('products').delete().eq('id', id);
+  const { error } = await supabase.rpc('admin_delete_product', { p_product_id: id });
+  if (error) throw new Error(error.message);
 }
 
 // ============================================================
