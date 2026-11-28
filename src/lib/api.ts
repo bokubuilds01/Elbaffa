@@ -497,7 +497,7 @@ export async function closeOrder(orderId: number): Promise<Invoice> {
 // Products
 // ============================================================
 export async function listProducts(search?: string): Promise<Product[]> {
-  let query = supabase.from('products').select('id, name, barcode, selling_price, cost_price, stock, category, image, low_stock_limit').order('name');
+  let query = supabase.from('products').select('id, name, barcode, selling_price, cost_price, stock, category, image, low_stock_limit').order('name').is('deleted_at', null);
   if (search) {
     query = query.or(`name.ilike.%${search}%,barcode.ilike.%${search}%`);
   }
